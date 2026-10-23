@@ -41,22 +41,26 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
   return await res.json() as T;
 }
 
+// ---------------------------------------------------------------------------
+// Telegram Account Forensics & Authentication API
+// ---------------------------------------------------------------------------
+
+export interface SendTelegramCodeResult {
+  flowId: string;
+  isDemo?: boolean;
+  message?: string;
+}
+
+export interface VerifyTelegramCodeResult {
+  status: string;
+  needsPassword?: boolean;
+  isDemo?: boolean;
+}
+
 /**
- * Analyzes a Telegram account for suspicious logins, unexpected sessions, and security weaknesses.
- * TODO: real backend (POST /api/v1/telegram/analyze)
+ * Realistic mock sample generator for fallback / demo mode.
  */
-export async function analyzeTelegram(phone: string, otp: string): Promise<TelegramScanResult> {
-  await wait(1600);
-
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/telegram/analyze`, {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify({ phone, otp }),
-  // });
-  // if (!res.ok) throw new Error('Failed to analyze Telegram account');
-  // return await res.json();
-
+function getDemoTelegramResult(phone: string): TelegramScanResult {
   const isDemoClean = phone.endsWith('0000');
 
   if (isDemoClean) {
@@ -68,6 +72,7 @@ export async function analyzeTelegram(phone: string, otp: string): Promise<Teleg
       summary: "Your Telegram account looks safe. All active logins are from your own devices in your home region.",
       twoFactorEnabled: true,
       timestamp: new Date().toISOString(),
+      isDemo: true,
       sessions: [
         {
           id: 'sess-1',
@@ -117,6 +122,7 @@ export async function analyzeTelegram(phone: string, otp: string): Promise<Teleg
     summary: "Someone logged into your Telegram account from another country without your permission, and your account lacks two-step password protection.",
     twoFactorEnabled: false,
     timestamp: new Date().toISOString(),
+    isDemo: true,
     sessions: [
       {
         id: 'sess-1',
@@ -198,6 +204,175 @@ export async function analyzeTelegram(phone: string, otp: string): Promise<Teleg
       "Warn close friends or family if the intruder may have sent them phishing requests posing as you."
     ]
   };
+}
+
+/**
+ * Requests a one-time verification code from Telegram.
+ * Falls back to demo mode if backend returns 503 (keys not configured).
+ */
+export async function sendTelegramCode(phone: string): Promise<SendTelegramCodeResult> {
+  try {
+    const res = await fetch(`${API_BASE}/api/telegram/send-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phone.trim() }),
+    });
+
+    if (res.status === 503) {
+      // Backend returned 503: keys not configured, run in demo mode
+      return {
+        flowId: `demo-flow-${Date.now()}`,
+        isDemo: true,
+        message: 'Demo Mode (Telegram API keys not configured on server)',
+      };
+    }
+
+    if (res.status === 429) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || 'Too many verification code requests. Please wait 10 minutes.');
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || 'Failed to request Telegram verification code.');
+    }
+
+    const data = await res.json();
+    return {
+      flowId: data.flowId,
+      message: data.message,
+      isDemo: false,
+    };
+  } catch (err: any) {
+    if (
+      err.message &&
+      (err.message.includes('Too many') ||
+        err.message.includes('Invalid phone') ||
+        err.message.includes('Telegram') ||
+        err.message.includes('recognized'))
+    ) {
+      throw err;
+    }
+    // Network failure / server offline: fallback to demo mode
+    return {
+      flowId: `demo-flow-${Date.now()}`,
+      isDemo: true,
+      message: 'Demo Mode (Telegram API keys not configured on server)',
+    };
+  }
+}
+
+/**
+ * Verifies code (and optional two-step cloud password).
+ * If 2FA password is required, returns { needsPassword: true }.
+ */
+export async function verifyTelegramCode(
+  flowId: string,
+  code: string,
+  password?: string
+): Promise<VerifyTelegramCodeResult> {
+  if (flowId.startsWith('demo-flow-')) {
+    await wait(600);
+    // Demo behavior: if user enters code '2fa' and hasn't entered a password yet, simulate password prompt
+    if (code.trim() === '2fa' && !password) {
+      return { status: 'needs_password', needsPassword: true, isDemo: true };
+    }
+    return { status: 'verified', needsPassword: false, isDemo: true };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/telegram/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        flowId,
+        code: code.trim(),
+        password: password ? password.trim() : null,
+      }),
+    });
+  } catch {
+    throw new Error('Cannot reach the analysis server. Is the backend running?');
+  }
+
+  if (res.status === 401) {
+    const data = await res.json().catch(() => ({}));
+    if (data?.needsPassword) {
+      return { status: 'needs_password', needsPassword: true };
+    }
+    throw new Error(data?.detail || 'Two-step verification password is required for this account.');
+  }
+
+  if (res.status === 429) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || 'Too many attempts. Please wait a moment.');
+  }
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || 'Verification failed. Please check the code.');
+  }
+
+  const data = await res.json();
+  return {
+    status: data.status || 'verified',
+    needsPassword: !!data.needsPassword,
+  };
+}
+
+/**
+ * Analyzes a Telegram account for suspicious logins, unexpected sessions, and security weaknesses.
+ * Can be called with flowId (real/demo) or with legacy (phone, otp) for sample loads.
+ */
+export async function analyzeTelegram(
+  flowIdOrPhone: string,
+  legacyOtp?: string
+): Promise<TelegramScanResult> {
+  // Support legacy sample calls from ScanContext: analyzeTelegram('+1555...', '12345')
+  if (legacyOtp !== undefined || flowIdOrPhone.startsWith('+')) {
+    await wait(1400);
+    return getDemoTelegramResult(flowIdOrPhone);
+  }
+
+  const flowId = flowIdOrPhone;
+  if (flowId.startsWith('demo-flow-')) {
+    await wait(1800);
+    return getDemoTelegramResult('+1 (555) 019-2834');
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/telegram/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flowId }),
+    });
+  } catch {
+    throw new Error('Cannot reach the analysis server. Is the backend running?');
+  }
+
+  if (res.status === 503) {
+    // If backend is unconfigured, return realistic demo data
+    return getDemoTelegramResult('+1 (555) 019-2834');
+  }
+
+  return await handleResponse<TelegramScanResult>(res, 'Failed to complete Telegram security investigation');
+}
+
+/**
+ * Cancels and disconnects an in-flight Telegram login flow.
+ */
+export async function cancelTelegram(flowId: string): Promise<void> {
+  if (!flowId || flowId.startsWith('demo-flow-')) return;
+  try {
+    await fetch(`${API_BASE}/api/telegram/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flowId }),
+    });
+  } catch {
+    // Suppress network errors on unmount cancellation
+  }
 }
 
 /**

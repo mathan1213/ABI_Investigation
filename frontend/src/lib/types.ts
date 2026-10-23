@@ -40,6 +40,7 @@ export interface TelegramScanResult {
   actionChecklist: string[];
   timestamp: string;
   twoFactorEnabled: boolean;
+  isDemo?: boolean;
 }
 
 export type RepoFindingCategory = 'secrets' | 'dependencies' | 'code' | 'network';

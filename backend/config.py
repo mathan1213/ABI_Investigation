@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     VIRUSTOTAL_KEY: Optional[str] = None
     GITHUB_TOKEN: Optional[str] = None
 
+    # Telegram MTProto API credentials (https://my.telegram.org)
+    TELEGRAM_API_ID: Optional[int] = None
+    TELEGRAM_API_HASH: Optional[str] = None
+
     # Safety limits
     REQUEST_TIMEOUT_SECONDS: float = 5.0
     PORT_CHECK_TIMEOUT_SECONDS: float = 2.0
@@ -36,5 +40,8 @@ class Settings(BaseSettings):
     REPO_MAX_SIZE_KB: int = 100 * 1024  # 100 MB
     MAX_REDIRECT_HOPS: int = 8
     TOR_EXIT_CACHE_HOURS: int = 6
+    TELEGRAM_SEND_CODE_RATE_LIMIT: int = 3  # per 10 minutes
+    TELEGRAM_DEFAULT_RATE_LIMIT: int = 10   # per minute
+    TELEGRAM_FLOW_TTL_SECONDS: int = 600   # 10 minutes
 
 settings = Settings()

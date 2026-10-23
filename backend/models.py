@@ -160,7 +160,87 @@ class RepoScanResponse(AppBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 5. Health Check Model
+# 5. Telegram Check Models
+# ---------------------------------------------------------------------------
+
+TelegramFindingType = Literal[
+    "unknown_device",
+    "foreign_login",
+    "impossible_travel",
+    "no_2fa",
+    "suspicious_link",
+]
+
+class TelegramSession(AppBaseModel):
+    id: str
+    device: str
+    app: str
+    ip: str
+    country: str
+    last_active: str = Field(..., alias="lastActive")
+    is_suspicious: bool = Field(..., alias="isSuspicious")
+    is_current: Optional[bool] = Field(default=None, alias="isCurrent")
+    flag_note: Optional[str] = Field(default=None, alias="flagNote")
+
+
+class TelegramFinding(AppBaseModel):
+    id: str
+    type: TelegramFindingType
+    title: str
+    explanation: str
+    risk: RiskLevel
+    date: Optional[str] = None
+
+
+class TelegramScanResult(AppBaseModel):
+    phone: str
+    account_name: str = Field(..., alias="accountName")
+    risk_score: int = Field(..., alias="riskScore", ge=0, le=100)
+    risk_level: RiskLevel = Field(..., alias="riskLevel")
+    summary: str
+    sessions: List[TelegramSession]
+    findings: List[TelegramFinding]
+    how_it_happened: str = Field(..., alias="howItHappened")
+    action_checklist: List[str] = Field(..., alias="actionChecklist")
+    timestamp: str
+    two_factor_enabled: bool = Field(..., alias="twoFactorEnabled")
+
+
+class TelegramSendCodeRequest(AppBaseModel):
+    phone: str = Field(..., description="Phone number in international E.164 format (+1234567890)")
+
+
+class TelegramSendCodeResponse(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+    message: str = "Verification code requested from Telegram"
+
+
+class TelegramVerifyRequest(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+    code: str
+    password: Optional[str] = None
+
+
+class TelegramVerifyResponse(AppBaseModel):
+    status: str
+    flow_id: str = Field(..., alias="flowId")
+    needs_password: bool = Field(default=False, alias="needsPassword")
+
+
+class TelegramAnalyzeRequest(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+
+
+class TelegramCancelRequest(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+
+
+class TelegramCancelResponse(AppBaseModel):
+    status: str = "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# 6. Health Check Model
 # ---------------------------------------------------------------------------
 
 class HealthResponse(AppBaseModel):

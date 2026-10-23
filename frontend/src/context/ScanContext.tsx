@@ -27,7 +27,7 @@ interface ScanContextType {
   overallRisk: RiskLevel;
   hasAnyScan: boolean;
   toasts: ToastNotification[];
-  setTelegramScan: (scan: TelegramScanResult) => void;
+  setTelegramScan: (scan: TelegramScanResult | null) => void;
   setRepoScan: (scan: RepoScanResult) => void;
   setIpScan: (res: IpCheckResult) => void;
   setLinkScan: (res: LinkCheckResult) => void;
@@ -217,8 +217,12 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const setTelegramScan = (scan: TelegramScanResult) => {
+  const setTelegramScan = (scan: TelegramScanResult | null) => {
     setTelegramScanState(scan);
+    if (!scan) {
+      localStorage.removeItem('abi_tg_scan');
+      return;
+    }
     addRecentScan({
       id: `sc-${Date.now()}`,
       date: 'Just now',

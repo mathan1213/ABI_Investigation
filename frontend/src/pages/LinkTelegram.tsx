@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Send,
@@ -19,6 +19,7 @@ import {
   Footprints,
   Compass,
   Link2,
+  Loader2,
 } from 'lucide-react';
 import { Stepper, StepItem } from '../components/Stepper';
 import { Analyzing } from '../components/Analyzing';
@@ -26,7 +27,12 @@ import { RiskGauge } from '../components/RiskGauge';
 import { RiskBadge } from '../components/RiskBadge';
 import { SessionTable } from '../components/SessionTable';
 import { useScan } from '../context/ScanContext';
-import { analyzeTelegram } from '../lib/api';
+import {
+  sendTelegramCode,
+  verifyTelegramCode,
+  analyzeTelegram,
+  cancelTelegram,
+} from '../lib/api';
 import { TelegramScanResult, TelegramFindingType } from '../lib/types';
 
 const STEPS: StepItem[] = [
@@ -42,52 +48,153 @@ const ANALYZE_MESSAGES = [
   'Looking up login locations & IP geolocations...',
   'Checking for impossible travel across continents...',
   'Evaluating Two-Step Password protection status...',
+  'Auditing official Telegram security service notifications...',
   'Calculating risk and compiling plain-English verdict...',
+  'Logging out security inspection session permanently...',
 ];
 
 export const LinkTelegram: React.FC = () => {
-  const { telegramScan, setTelegramScan } = useScan();
+  const { telegramScan, setTelegramScan, addToast } = useScan();
 
   // If already scanned previously, default to Step 4, otherwise Step 1
   const [step, setStep] = useState<number>(telegramScan ? 4 : 1);
   const [agreedToConsent, setAgreedToConsent] = useState(false);
   const [phone, setPhone] = useState('+1 (555) 019-2834');
+  const [flowId, setFlowId] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
+  const [password, setPassword] = useState('');
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
+  const [isSendingCode, setIsSendingCode] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeChecklist, setActiveChecklist] = useState<Record<number, boolean>>({});
 
-  const handleStartAnalysis = async () => {
-    if (!phone || phone.trim().length < 8) {
-      setErrorMsg('Please enter a valid international phone number.');
-      return;
-    }
-    if (!otp || otp.trim().length < 4) {
-      setErrorMsg('Please enter the 5-digit verification code sent to your Telegram app.');
+  // Cleanup on unmount if in-flight flow exists
+  useEffect(() => {
+    return () => {
+      if (flowId && step < 4) {
+        cancelTelegram(flowId);
+      }
+    };
+  }, [flowId, step]);
+
+  const handleSendCode = async () => {
+    const cleanPhone = phone.trim();
+    if (!cleanPhone || cleanPhone.length < 8) {
+      setErrorMsg('Please enter a valid phone number with country code (e.g. +1 555 019 2834 or +91 98765 43210).');
       return;
     }
 
+    setIsSendingCode(true);
     setErrorMsg(null);
-    setStep(3);
 
     try {
-      const result: TelegramScanResult = await analyzeTelegram(phone, otp);
-      setTelegramScan(result);
-      setStep(4);
-    } catch {
-      setErrorMsg('Could not complete security inspection. Please check your credentials.');
-      setStep(2);
+      const res = await sendTelegramCode(cleanPhone);
+      setFlowId(res.flowId);
+      setIsDemo(!!res.isDemo);
+      setOtpSent(true);
+
+      if (res.isDemo) {
+        setOtp('12345'); // Pre-fill realistic code in demo mode
+        addToast({
+          type: 'info',
+          title: 'Demo Mode Active',
+          message: 'Backend Telegram keys are not configured. Running in simulated demo mode (code: 12345).',
+        });
+      } else {
+        addToast({
+          type: 'success',
+          title: 'Verification Code Sent',
+          message: 'Telegram sent a verification code to your Telegram app or SMS.',
+        });
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to send verification code. Please check your phone format.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Could Not Send Code',
+        message: msg,
+      });
+    } finally {
+      setIsSendingCode(false);
     }
   };
 
-  const handleSendOtp = () => {
-    if (!phone || phone.trim().length < 8) {
-      setErrorMsg('Please enter a valid phone number first.');
+  const handleVerifyAndAnalyze = async () => {
+    if (!flowId) {
+      setErrorMsg('Please request a verification code first.');
       return;
     }
+    if (!otp || otp.trim().length < 4) {
+      setErrorMsg('Please enter the verification code sent by Telegram.');
+      return;
+    }
+    if (needsPassword && (!password || password.trim().length === 0)) {
+      setErrorMsg('Please enter your Two-Step Verification cloud password.');
+      return;
+    }
+
+    setIsVerifying(true);
     setErrorMsg(null);
-    setOtpSent(true);
-    setOtp('59381'); // Pre-fill realistic code for smooth testing
+
+    try {
+      const verifyRes = await verifyTelegramCode(flowId, otp, password);
+
+      if (verifyRes.needsPassword) {
+        setNeedsPassword(true);
+        setIsVerifying(false);
+        addToast({
+          type: 'warning',
+          title: 'Two-Step Password Required',
+          message: 'This Telegram account has a secondary password. Enter it below to proceed.',
+        });
+        return;
+      }
+
+      // Verified! Transition to Step 3 (Analyzing)
+      setStep(3);
+
+      const scanResult = await analyzeTelegram(flowId);
+      if (scanResult.isDemo || isDemo) {
+        setIsDemo(true);
+      }
+      setTelegramScan(scanResult);
+      setStep(4);
+      addToast({
+        type: 'success',
+        title: 'Audit Complete',
+        message: 'Your Telegram session audit report is ready.',
+      });
+    } catch (err: any) {
+      const msg = err?.message || 'Verification or analysis failed. Please check the code.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Verification Failed',
+        message: msg,
+      });
+      setStep(2);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleAuditAnotherNumber = async () => {
+    if (flowId && step < 4) {
+      await cancelTelegram(flowId);
+    }
+    setFlowId(null);
+    setOtpSent(false);
+    setOtp('');
+    setPassword('');
+    setNeedsPassword(false);
+    setErrorMsg(null);
+    setTelegramScan(null);
+    setAgreedToConsent(false);
+    setStep(1);
   };
 
   const toggleChecklist = (index: number) => {
@@ -189,7 +296,7 @@ export const LinkTelegram: React.FC = () => {
             <div className="text-xs text-slate-300 leading-relaxed space-y-1">
               <span className="font-bold text-cyan-300 block">Strict Zero-Storage Guarantee</span>
               <p>
-                We do not read your private chat messages, photos, contacts, or voice notes. We never store your phone number or access codes. All audit calculations happen in real-time memory and are cleared when you close your browser.
+                We do not read your private chat messages, photos, contacts, or voice notes. We never store your phone number or access codes. All audit calculations happen in real-time memory and this inspection session is immediately logged out when finished.
               </p>
             </div>
           </div>
@@ -232,12 +339,30 @@ export const LinkTelegram: React.FC = () => {
               </p>
             </div>
             <button
-              onClick={() => setStep(1)}
+              onClick={() => {
+                if (flowId) cancelTelegram(flowId);
+                setStep(1);
+              }}
               className="text-xs text-slate-400 hover:text-white"
             >
               Back to Consent
             </button>
           </div>
+
+          {/* Demo Mode Notice Banner */}
+          {isDemo && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+              <AlertTriangle size={16} className="shrink-0 text-amber-400" />
+              <div>
+                <span className="font-semibold block text-amber-200">
+                  Demo Mode (Telegram API keys not configured on server)
+                </span>
+                <span className="text-slate-300">
+                  You can test this audit flow with any phone number. A simulated verification code (e.g. 12345) will work.
+                </span>
+              </div>
+            </div>
+          )}
 
           {errorMsg && (
             <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
@@ -252,76 +377,134 @@ export const LinkTelegram: React.FC = () => {
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
                 Phone Number (with Country Code)
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Smartphone size={17} />
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Smartphone size={17} />
+                  </div>
+                  <input
+                    type="text"
+                    value={phone}
+                    onChange={(e) => {
+                      setPhone(e.target.value);
+                      if (otpSent) {
+                        setOtpSent(false);
+                        setFlowId(null);
+                        setNeedsPassword(false);
+                      }
+                    }}
+                    placeholder="+919876543210 or +14155552671"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                  />
                 </div>
-                <input
-                  type="text"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+1 (555) 000-0000"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                />
+                <button
+                  type="button"
+                  disabled={isSendingCode}
+                  onClick={handleSendCode}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-cyan-400 text-xs font-semibold border border-slate-700 disabled:opacity-50 transition-colors flex items-center gap-1.5 shrink-0"
+                >
+                  {isSendingCode ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>Sending...</span>
+                    </>
+                  ) : otpSent ? (
+                    <span>Resend Code</span>
+                  ) : (
+                    <span>Send Code</span>
+                  )}
+                </button>
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
-                Tip: Enter your real test number, or leave the demo number as is.
+                Enter your number with international prefix (+1, +91, +44, etc.).
               </p>
             </div>
 
             {/* OTP Section */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
-                  Telegram Verification Code (OTP)
-                </label>
-                {!otpSent ? (
-                  <button
-                    type="button"
-                    onClick={handleSendOtp}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold"
-                  >
-                    Send Verification Code
-                  </button>
-                ) : (
-                  <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
-                    <CheckCircle size={12} /> Code Sent to Telegram App
-                  </span>
+            {otpSent && (
+              <div className="space-y-3 animate-fadeIn">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+                      Telegram Verification Code
+                    </label>
+                    <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
+                      <CheckCircle size={12} /> Code Sent to Telegram App
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <KeyRound size={17} />
+                    </div>
+                    <input
+                      type="text"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      placeholder="e.g. 59381"
+                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono tracking-widest focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                    />
+                  </div>
+
+                  {/* Required note under code field */}
+                  <p className="text-[11px] text-cyan-400/90 mt-1.5 flex items-center gap-1.5">
+                    <ShieldCheck size={13} className="shrink-0 text-cyan-400" />
+                    <span>Telegram will send you a 'new login' alert. That is this tool, and it logs out when finished.</span>
+                  </p>
+                </div>
+
+                {/* Password field if 2-step verification is enabled */}
+                {needsPassword && (
+                  <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
+                    <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
+                      <Lock size={15} />
+                      <span>Two-Step Verification Password Required</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Your Telegram account has cloud password protection enabled. Enter your password to inspect session logs. It is held only in temporary server memory and never stored.
+                    </p>
+                    <div className="relative mt-2">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                        <KeyRound size={17} />
+                      </div>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Enter your Two-Step Verification password"
+                        className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <KeyRound size={17} />
-                </div>
-                <input
-                  type="text"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  placeholder="e.g. 59381"
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono tracking-widest focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                />
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Telegram sends this code inside your official Telegram app, not via SMS.
-              </p>
-            </div>
+            )}
           </div>
 
           <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
             <HelpCircle size={15} className="text-cyan-400 shrink-0" />
             <span>
-              Clicking <strong>Connect & Analyze</strong> performs a simulated read-only security query against your active Telegram sessions.
+              Clicking <strong>Connect & Run Audit</strong> queries active sessions and IP geolocations, then immediately calls logout.
             </span>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
             <button
-              onClick={handleStartAnalysis}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 transition-all shadow-glow hover:shadow-glow-lg"
+              disabled={!otpSent || isVerifying}
+              onClick={handleVerifyAndAnalyze}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-glow hover:shadow-glow-lg"
             >
-              <span>Connect & Run Audit</span>
-              <ArrowRight size={16} />
+              {isVerifying ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Verifying & Starting Audit...</span>
+                </>
+              ) : (
+                <>
+                  <span>Connect & Run Audit</span>
+                  <ArrowRight size={16} />
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -339,6 +522,21 @@ export const LinkTelegram: React.FC = () => {
       {/* STEP 4: RESULT */}
       {step === 4 && scanData && (
         <div className="space-y-6">
+          {/* Demo Mode Notice Banner on Result */}
+          {(isDemo || scanData.isDemo) && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+              <AlertTriangle size={16} className="shrink-0 text-amber-400" />
+              <div>
+                <span className="font-semibold block text-amber-200">
+                  Demo Mode (Telegram API keys not configured on server)
+                </span>
+                <span className="text-slate-300">
+                  This report was generated using simulated mock data because Telegram MTProto keys (TELEGRAM_API_ID and TELEGRAM_API_HASH) are not configured in backend/.env.
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Main Verdict Card with Large Risk Gauge */}
           <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex-1 space-y-3 text-center md:text-left">
@@ -346,6 +544,9 @@ export const LinkTelegram: React.FC = () => {
                 <RiskBadge level={scanData.riskLevel} size="lg" />
                 <span className="text-xs text-slate-400 font-mono">
                   Target: {scanData.phone}
+                </span>
+                <span className="text-xs text-cyan-400 font-medium">
+                  {scanData.accountName}
                 </span>
               </div>
               <h2 className="text-2xl font-extrabold text-white">
@@ -475,10 +676,7 @@ export const LinkTelegram: React.FC = () => {
           {/* Bottom Actions */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800">
             <button
-              onClick={() => {
-                setStep(1);
-                setAgreedToConsent(false);
-              }}
+              onClick={handleAuditAnotherNumber}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors"
             >
               <RotateCcw size={14} />
