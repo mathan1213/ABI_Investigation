@@ -41,65 +41,19 @@ export const Report: React.FC = () => {
     telegramScan,
     repoScan,
     networkScan,
-    overallScore: ctxScore,
-    overallRisk: ctxRisk,
+    overallScore,
+    overallRisk,
     hasAnyScan,
     demoModules,
+    reportData,
+    isReportLoading: isLoading,
     loadSampleData,
     addToast,
   } = useScan();
 
-  const [reportData, setReportData] = useState<FullReport | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Record<number, boolean>>({});
   const reportRef = useRef<HTMLDivElement>(null);
-
-  // Fetch synthesized report from real backend risk engine
-  useEffect(() => {
-    let isMounted = true;
-    if (!hasAnyScan) {
-      setReportData(null);
-      setIsLoading(false);
-      return;
-    }
-
-    const fetchReport = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const data = await getReport({
-          telegram: telegramScan,
-          repo: repoScan,
-          network: networkScan,
-          demoModules,
-        });
-        if (isMounted) {
-          setReportData(data);
-        }
-      } catch (err: any) {
-        if (isMounted) {
-          setError(err?.message || 'Failed to synthesize investigation report.');
-          addToast({
-            type: 'error',
-            title: 'Report Synthesis Notice',
-            message: err?.message || 'Using local report representation.',
-          });
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    fetchReport();
-    return () => {
-      isMounted = false;
-    };
-  }, [telegramScan, repoScan, networkScan, demoModules, hasAnyScan]);
 
   const toggleStep = (id: number) => {
     setCompletedSteps((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -237,8 +191,8 @@ export const Report: React.FC = () => {
     day: 'numeric',
   });
 
-  const displayScore = reportData ? reportData.overallScore : ctxScore;
-  const displayRisk = reportData ? reportData.overallRisk : ctxRisk;
+  const displayScore = reportData ? reportData.overallScore : overallScore;
+  const displayRisk = reportData ? reportData.overallRisk : overallRisk;
   const displaySummary = reportData ? reportData.summary : 'Compiling security findings across channels...';
   const displayHowItHappened = reportData?.howItHappened || [];
   const displayActions: ActionPlanItem[] = reportData?.whatToDoNow || reportData?.actionPlan || [];

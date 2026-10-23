@@ -9,6 +9,7 @@ import {
   RecentScan,
   RiskLevel,
   ToastNotification,
+  FullReport,
 } from '../lib/types';
 import {
   analyzeTelegram,
@@ -16,6 +17,7 @@ import {
   checkIp,
   checkLink,
   checkWebsite,
+  getReport,
 } from '../lib/api';
 
 interface ScanContextType {
@@ -28,6 +30,9 @@ interface ScanContextType {
   hasAnyScan: boolean;
   demoModules: string[];
   toasts: ToastNotification[];
+  reportData: FullReport | null;
+  isReportLoading: boolean;
+  refreshReport: () => Promise<void>;
   setTelegramScan: (scan: TelegramScanResult | null) => void;
   setRepoScan: (scan: RepoScanResult) => void;
   setIpScan: (res: IpCheckResult) => void;
@@ -116,6 +121,8 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
+  const [reportData, setReportData] = useState<FullReport | null>(null);
+  const [isReportLoading, setIsReportLoading] = useState<boolean>(false);
 
   // Persist state to local storage safely
   useEffect(() => {
@@ -270,6 +277,7 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setRepoScanState(null);
     setNetworkScanState({});
     setDemoModules([]);
+    setReportData(null);
     localStorage.removeItem('abi_tg_scan');
     localStorage.removeItem('abi_repo_scan');
     localStorage.removeItem('abi_net_scan');
@@ -516,70 +524,65 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
     telegramScan || repoScan || networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult
   );
 
-  // Compute overall score dynamically from REAL modules only
-  const { overallScore, overallRisk } = useMemo<{
-    overallScore: number | null;
-    overallRisk: RiskLevel | null;
-  }>(() => {
-    const realModuleScores: number[] = [];
-    let hasRealCriticalFinding = false;
+  const refreshReport = async () => {
+    if (!hasAnyScan) {
+      setReportData(null);
+      return;
+    }
+    setIsReportLoading(true);
+    try {
+      const rep = await getReport({
+        telegram: telegramScan,
+        repo: repoScan,
+        network: networkScan,
+        demoModules,
+      });
+      setReportData(rep);
+    } catch (err) {
+      console.error('Failed to sync report with backend:', err);
+    } finally {
+      setIsReportLoading(false);
+    }
+  };
 
-    if (telegramScan && !demoModules.includes('telegram')) {
-      realModuleScores.push(telegramScan.riskScore);
-      if (telegramScan.findings?.some((f) => f.risk === 'critical')) {
-        hasRealCriticalFinding = true;
-      }
+  // Sync report data whenever scanned assets or demo modules change
+  useEffect(() => {
+    let isCurrent = true;
+    if (!hasAnyScan) {
+      setReportData(null);
+      return;
     }
 
-    if (repoScan && !demoModules.includes('repo')) {
-      realModuleScores.push(repoScan.riskScore);
-      if ((repoScan.counts?.critical ?? 0) > 0 || repoScan.findings?.some((f) => f.severity === 'critical')) {
-        hasRealCriticalFinding = true;
+    const syncReport = async () => {
+      setIsReportLoading(true);
+      try {
+        const rep = await getReport({
+          telegram: telegramScan,
+          repo: repoScan,
+          network: networkScan,
+          demoModules,
+        });
+        if (isCurrent) {
+          setReportData(rep);
+        }
+      } catch (err) {
+        console.error('Failed to sync report with backend:', err);
+      } finally {
+        if (isCurrent) {
+          setIsReportLoading(false);
+        }
       }
-    }
+    };
 
-    if (!demoModules.includes('network')) {
-      const netScores: number[] = [];
-      if (networkScan.ipResult) {
-        netScores.push(networkScan.ipResult.abuseScore);
-        if (networkScan.ipResult.riskLevel === 'critical') hasRealCriticalFinding = true;
-      }
-      if (networkScan.linkResult) {
-        netScores.push(100 - networkScan.linkResult.reputationScore);
-        if (networkScan.linkResult.riskLevel === 'critical') hasRealCriticalFinding = true;
-      }
-      if (networkScan.websiteResult) {
-        netScores.push(networkScan.websiteResult.riskScore);
-        if (networkScan.websiteResult.riskLevel === 'critical') hasRealCriticalFinding = true;
-      }
+    syncReport();
+    return () => {
+      isCurrent = false;
+    };
+  }, [telegramScan, repoScan, networkScan, demoModules, hasAnyScan]);
 
-      if (netScores.length > 0) {
-        realModuleScores.push(Math.max(...netScores));
-      }
-    }
-
-    if (realModuleScores.length === 0) {
-      return { overallScore: null, overallRisk: null };
-    }
-
-    const highest = Math.max(...realModuleScores);
-    const avg = realModuleScores.reduce((a, b) => a + b, 0) / realModuleScores.length;
-    let score = Math.round(0.5 * highest + 0.5 * avg);
-    score = Math.max(0, Math.min(100, score));
-
-    let level: RiskLevel = 'low';
-    if (score >= 75) level = 'critical';
-    else if (score >= 50) level = 'high';
-    else if (score >= 25) level = 'medium';
-    else level = 'low';
-
-    // Special Rule: If any finding in REAL modules is Critical, overall level is at least High
-    if (hasRealCriticalFinding && (level === 'low' || level === 'medium')) {
-      level = 'high';
-    }
-
-    return { overallScore: score, overallRisk: level };
-  }, [telegramScan, repoScan, networkScan, demoModules]);
+  // Display overallScore and overallRisk exactly as returned by POST /api/report/generate
+  const overallScore = reportData ? reportData.overallScore : null;
+  const overallRisk = reportData ? reportData.overallRisk : null;
 
   return (
     <ScanContext.Provider
@@ -593,6 +596,9 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
         hasAnyScan,
         demoModules,
         toasts,
+        reportData,
+        isReportLoading,
+        refreshReport,
         setTelegramScan,
         setRepoScan,
         setIpScan,

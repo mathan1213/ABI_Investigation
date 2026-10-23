@@ -74,9 +74,16 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
 
     if tg:
         tg_score = tg.risk_score
-        tg_level = tg.risk_level
+        base_tg_level = score_to_risk_level(tg_score)
+        has_tg_critical = any(f.risk == "critical" for f in tg.findings)
         tg_findings_count = len(tg.findings)
-        tg_details = f"{len(tg.sessions)} session(s) inspected, {tg_findings_count} finding(s)"
+
+        if has_tg_critical and base_tg_level != "critical":
+            tg_level: RiskLevel = "critical"
+            tg_details = f"{len(tg.sessions)} session(s) inspected, {tg_findings_count} finding(s) (raised to Critical by a critical finding)"
+        else:
+            tg_level: RiskLevel = base_tg_level
+            tg_details = f"{len(tg.sessions)} session(s) inspected, {tg_findings_count} finding(s)"
 
         # Consistency check: score vs findings
         if tg_score > 0 and tg_findings_count == 0:
@@ -120,9 +127,16 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
 
     if repo:
         repo_score = repo.risk_score
-        repo_level = repo.risk_level
+        base_repo_level = score_to_risk_level(repo_score)
+        has_repo_critical = (repo.counts.critical > 0 or any(f.severity == "critical" for f in repo.findings))
         repo_findings_count = len(repo.findings)
-        repo_details = f"{repo.repo_name} ({repo_findings_count} finding(s) in {repo.scanned_files_count} file(s))"
+
+        if has_repo_critical and base_repo_level != "critical":
+            repo_level: RiskLevel = "critical"
+            repo_details = f"{repo.repo_name} ({repo_findings_count} finding(s) in {repo.scanned_files_count} file(s), raised to Critical by a critical finding)"
+        else:
+            repo_level: RiskLevel = base_repo_level
+            repo_details = f"{repo.repo_name} ({repo_findings_count} finding(s) in {repo.scanned_files_count} file(s))"
 
         # Consistency check: score vs findings
         if repo_score > 0 and repo_findings_count == 0:
@@ -312,8 +326,19 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
             net_scores.append(int(web_res.get("riskScore") or web_res.get("risk_score") or 0))
 
         composite_net_score = max(net_scores) if net_scores else 0
-        net_level = score_to_risk_level(composite_net_score)
-        net_details = f"{net_findings_from_network} finding(s) across network targets"
+        base_net_level = score_to_risk_level(composite_net_score)
+        has_net_critical = any(
+            nf.severity == "critical"
+            for nf in network_findings
+            if nf.source in ("IP Check", "Link Check", "Website Check")
+        )
+
+        if has_net_critical and base_net_level != "critical":
+            net_level: RiskLevel = "critical"
+            net_details = f"{net_findings_from_network} finding(s) across network targets (raised to Critical by a critical finding)"
+        else:
+            net_level: RiskLevel = base_net_level
+            net_details = f"{net_findings_from_network} finding(s) across network targets"
 
         # Consistency check: score vs findings
         if composite_net_score > 0 and net_findings_from_network == 0:
@@ -485,9 +510,10 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
     # Generated from the ACTUAL finding type, with priority EQUAL to finding severity.
     # Missing 2FA -> "Turn on two-step verification and add a recovery email" (High priority).
     # Only suggest "change your password" when 2FA is already ON!
+    # Checklist steps that come from demo modules must end with " (demo)".
     # De-duplicated and capped at maximum 10 items, most urgent first.
     # -----------------------------------------------------------------------
-    raw_actions: List[Tuple[int, str, str, RiskLevel]] = []
+    raw_actions: List[Tuple[int, str, str, RiskLevel, bool]] = []
 
     # Priority rank for sorting: critical=0, high=1, medium=2, low=3
     sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -506,6 +532,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                     "Terminate unfamiliar Telegram sessions",
                     "Go to Telegram Settings > Devices and tap 'Terminate all other sessions' to disconnect unrecognized devices immediately.",
                     prio,
+                    is_tg_demo,
                 )
             )
 
@@ -517,6 +544,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                     "Turn on two-step verification and add a recovery email",
                     "Configure a secondary cloud password and recovery email under Telegram Settings > Privacy and Security > Two-Step Verification.",
                     "high",
+                    is_tg_demo,
                 )
             )
         else:
@@ -528,6 +556,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                         "Change your two-step verification password",
                         "Update your cloud password under Telegram Settings > Privacy and Security > Two-Step Verification to ensure existing sessions cannot regain access.",
                         "high",
+                        is_tg_demo,
                     )
                 )
 
@@ -538,6 +567,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                     "Log out old devices",
                     "Review Telegram Settings > Devices and log out old devices that have been inactive for over 30 days.",
                     dormant_session_finding.risk,
+                    is_tg_demo,
                 )
             )
 
@@ -549,6 +579,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                         f"Review Telegram alert: {f.title}",
                         f"Check official Telegram notifications. {f.explanation}",
                         f.risk,
+                        is_tg_demo,
                     )
                 )
 
@@ -562,6 +593,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                         f"Revoke leaked secret ({rf.title})",
                         f"Immediately invalidate and rotate the credential found in '{rf.file_path}'. {rf.suggested_fix}",
                         rf.severity,
+                        is_repo_demo,
                     )
                 )
             elif rf.category == "dependencies":
@@ -571,6 +603,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                         f"Upgrade vulnerable package ({rf.title})",
                         f"Update the package mentioned in '{rf.file_path}' to the latest safe release.",
                         rf.severity,
+                        is_repo_demo,
                     )
                 )
             elif rf.category in ("code", "network"):
@@ -580,6 +613,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                         f"Remediate code finding ({rf.title})",
                         f"In '{rf.file_path}': {rf.suggested_fix}",
                         rf.severity,
+                        is_repo_demo,
                     )
                 )
 
@@ -594,6 +628,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                             f"Block hostile network address ({nf.target or 'IP'})",
                             f"Restrict inbound and outbound firewall connections to {nf.target or 'this address'}. {nf.detail}",
                             nf.severity,
+                            is_net_demo,
                         )
                     )
                 elif "port" in nf.title.lower():
@@ -603,6 +638,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                             f"Close exposed port ({nf.target or 'service'})",
                             f"Configure network security group or firewall to restrict access to {nf.target or 'open ports'}.",
                             nf.severity,
+                            is_net_demo,
                         )
                     )
                 elif "header" in nf.title.lower() or "ssl" in nf.title.lower():
@@ -612,6 +648,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
                             f"Harden web security ({nf.target or 'Domain'})",
                             f"Configure security headers (HSTS, CSP) and maintain valid SSL certificates.",
                             nf.severity,
+                            is_net_demo,
                         )
                     )
 
@@ -621,7 +658,10 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
     what_to_do_now: List[ActionPlanItem] = []
     seen_action_signatures: Set[str] = set()
 
-    for prio_idx, title, detail, sev in raw_actions:
+    for prio_idx, title, detail, sev, is_action_demo in raw_actions:
+        if is_action_demo and not title.endswith(" (demo)"):
+            title = f"{title} (demo)"
+
         sig = title.strip().lower()
         if sig in seen_action_signatures:
             continue
@@ -660,9 +700,15 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
     if not has_network:
         limitations.append("Network check module was not scanned; public IP reputation and website ports were not tested.")
 
-    if not settings.ABUSEIPDB_KEY:
+    # Only add AbuseIPDB and VirusTotal warnings when the report actually contains IP checks, link checks, or Telegram session IPs
+    has_ip_checks = bool(ip_res)
+    has_telegram_ips = bool(tg and any(s.ip for s in tg.sessions))
+    has_link_checks = bool(link_res)
+
+    if (has_ip_checks or has_telegram_ips) and not settings.ABUSEIPDB_KEY:
         limitations.append("AbuseIPDB API key is not configured on the server; IP abuse scores are calculated from proxy/hosting heuristics.")
-    if not settings.VIRUSTOTAL_KEY:
+
+    if has_link_checks and not settings.VIRUSTOTAL_KEY:
         limitations.append("VirusTotal API key is not configured on the server; link reputation relies on domain age, DNS records, and SSL health.")
 
     for m in modules:

@@ -419,7 +419,88 @@ def test_report_score_finding_inconsistency_warning():
 
 
 # ---------------------------------------------------------------------------
-# 5. De-duplication and Rate Limiting
+# 5. Module Level Elevation, Limitations Warnings, and Demo Suffix Tests
+# ---------------------------------------------------------------------------
+
+def test_module_critical_finding_raises_level_and_details():
+    # Telegram with score 40 (normally medium score band), but has a Critical finding
+    tg_medium_score_with_crit = dict(MOCK_TELEGRAM_CRITICAL)
+    tg_medium_score_with_crit["riskScore"] = 40
+    tg_medium_score_with_crit["riskLevel"] = "medium"
+
+    resp = client.post(
+        "/api/report/generate",
+        json={"telegram": tg_medium_score_with_crit},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    tg_mod = next(m for m in data["modules"] if m["module"] == "telegram")
+    # Level must be raised to critical
+    assert tg_mod["riskLevel"] == "critical"
+    # Details text must state that it was raised to Critical by a critical finding
+    assert "raised to Critical by a critical finding" in tg_mod["details"]
+
+
+def test_limitations_api_key_warnings_conditional():
+    # A: Only repo scanned (no IP check, no link check, no session IPs)
+    resp_repo = client.post(
+        "/api/report/generate",
+        json={"repo": MOCK_REPO_MEDIUM},
+    )
+    assert resp_repo.status_code == 200
+    limits_repo = resp_repo.json()["limitations"]
+    assert not any("AbuseIPDB" in l for l in limits_repo)
+    assert not any("VirusTotal" in l for l in limits_repo)
+
+    # B: Network check with IP only
+    resp_ip = client.post(
+        "/api/report/generate",
+        json={"network": {"ipResult": MOCK_NETWORK_CHECK["ipResult"]}},
+    )
+    assert resp_ip.status_code == 200
+    limits_ip = resp_ip.json()["limitations"]
+    assert any("AbuseIPDB" in l for l in limits_ip)
+    assert not any("VirusTotal" in l for l in limits_ip)
+
+    # C: Network check with link check
+    resp_link = client.post(
+        "/api/report/generate",
+        json={"network": {"linkResult": {"url": "https://test.com", "sslValid": True, "reputationScore": 80, "verdict": "Safe"}}},
+    )
+    assert resp_link.status_code == 200
+    limits_link = resp_link.json()["limitations"]
+    assert any("VirusTotal" in l for l in limits_link)
+
+
+def test_checklist_steps_demo_suffix():
+    # Telegram is demo, Repo is real
+    resp = client.post(
+        "/api/report/generate",
+        json={
+            "telegram": MOCK_TELEGRAM_CRITICAL,
+            "repo": MOCK_REPO_CRITICAL,
+            "demoModules": ["telegram"],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    actions = data["whatToDoNow"]
+
+    # Telegram actions (from demo module) must end with " (demo)"
+    tg_actions = [a for a in actions if "Telegram" in a["title"] or "sessions" in a["title"] or "two-step" in a["title"]]
+    assert len(tg_actions) > 0
+    for a in tg_actions:
+        assert a["title"].endswith(" (demo)")
+
+    # Repo action (from real module) must NOT end with " (demo)"
+    repo_actions = [a for a in actions if "secret" in a["title"].lower() or "aws" in a["title"].lower()]
+    assert len(repo_actions) > 0
+    for a in repo_actions:
+        assert not a["title"].endswith(" (demo)")
+
+
+# ---------------------------------------------------------------------------
+# 6. De-duplication and Rate Limiting
 # ---------------------------------------------------------------------------
 
 def test_report_action_plan_deduplication_and_limit():
