@@ -588,19 +588,21 @@ async def inspect_link(url_str: str) -> LinkCheckResponse:
 # 3. Website Check Logic
 # ---------------------------------------------------------------------------
 
+def probe_port_sync(host: str, port: int, timeout: float = 3.5) -> Tuple[int, str]:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return port, "Open"
+    except Exception:
+        return port, "Closed"
+
+
 async def check_single_port(host: str, port: int) -> Tuple[int, str]:
     """
-    Tests if a specific port is open using a non-blocking TCP socket connect with 2.0s timeout.
+    Tests if a specific port is open using a non-blocking thread executor.
     Returns (port, 'Open' | 'Closed').
     """
-    try:
-        conn = asyncio.open_connection(host, port)
-        reader, writer = await asyncio.wait_for(conn, timeout=settings.PORT_CHECK_TIMEOUT_SECONDS)
-        writer.close()
-        await writer.wait_closed()
-        return port, "Open"
-    except (asyncio.TimeoutError, OSError):
-        return port, "Closed"
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, probe_port_sync, host, port, settings.PORT_CHECK_TIMEOUT_SECONDS + 1.5)
 
 
 async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
@@ -662,6 +664,8 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
     ssl_expires_on: Optional[str] = None
     ssl_days_remaining = 0
 
+    ssl_expired = False
+    ssl_invalid = False
     try:
         loop = asyncio.get_running_loop()
         ctx = ssl.create_default_context()
@@ -677,11 +681,19 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
             ssl_expires_on = not_after_str
             exp_date = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
             now = datetime.datetime.now(datetime.timezone.utc)
-            ssl_days_remaining = max(0, (exp_date - now).days)
-            ssl_expiry_str = exp_date.strftime("%B %d, %Y")
+            if exp_date < now:
+                ssl_expired = True
+                ssl_days_remaining = 0
+                ssl_expiry_str = "Expired"
+            else:
+                ssl_days_remaining = max(0, (exp_date - now).days)
+                ssl_expiry_str = exp_date.strftime("%B %d, %Y")
+    except ssl.SSLError:
+        ssl_invalid = True
+        ssl_expiry_str = "Invalid SSL certificate"
     except Exception:
         ssl_days_remaining = 0
-        ssl_expiry_str = "Unavailable or expired"
+        ssl_expiry_str = "Unavailable"
 
     # BUG FIX 2: Follow redirects up to 5 hops with SSRF validation on every hop
     # Read headers from the FINAL response
@@ -745,6 +757,15 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
             description=desc,
         ))
 
+    # If SSL certificate was successfully validated, port 443 is demonstrably open
+    if ssl_days_remaining > 0 and 443 not in open_ports_list:
+        open_ports_list.append(443)
+        for p in ports_list:
+            if p.port == 443:
+                p.state = "Open"
+                p.risk = "low"
+                p.note = "Secure HTTPS port is open and working."
+
     # Calculate risk score & verdict directly from results
     risk_score = 0
     flaws: List[str] = []
@@ -755,7 +776,7 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
     if 21 in open_ports_list:
         risk_score += 35
         flaws.append("Exposed insecure FTP port 21.")
-    if 443 not in open_ports_list:
+    if 443 not in open_ports_list and ssl_days_remaining == 0:
         risk_score += 25
         flaws.append("HTTPS port 443 is not open.")
     if ssl_days_remaining < 15 and 443 in open_ports_list:
@@ -777,30 +798,41 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
 
     missing_count = len(failed_headers)
 
-    # BUG FIX 2: Generate explanation and verdict FROM actual results
-    # Never say "well-hardened" unless all 5 headers pass!
-    if 22 in open_ports_list or 21 in open_ports_list:
+    # Threat signals check:
+    has_risky_ports = (22 in open_ports_list or 21 in open_ports_list)
+    has_ssl_issue = ssl_expired or ssl_invalid or (443 not in open_ports_list and ssl_days_remaining == 0)
+    has_expiring_ssl = (ssl_days_remaining > 0 and ssl_days_remaining < 15 and 443 in open_ports_list)
+
+    if has_risky_ports:
         verdict = "Dangerous"
         risk_level = "critical"
         explanation = (
-            f"Critical security alert for {clean_domain}: administrative ports (such as SSH/FTP) are exposed to the public internet, "
-            f"and {missing_count} browser security headers failed ({', '.join(failed_headers)})."
+            f"Critical security alert for {clean_domain}: administrative ports (such as SSH/FTP) are exposed to the public internet"
+            + (f", and {missing_count} recommended hardening headers are missing ({', '.join(failed_headers)})." if missing_count else ".")
         )
-    elif missing_count >= 3 or risk_score >= 40:
+    elif has_ssl_issue:
+        verdict = "Dangerous"
+        risk_level = "high"
+        explanation = (
+            f"Security risk for {clean_domain}: secure HTTPS port 443 is not open or SSL certificate is invalid/expired."
+        )
+    elif has_expiring_ssl:
         verdict = "Suspicious"
         risk_level = "medium"
         explanation = (
-            f"The website server for {clean_domain} is missing {missing_count} essential browser protection headers: {', '.join(failed_headers)}. "
-            "Visitors may be vulnerable to clickjacking, unauthorized framing, or cross-site script attacks."
+            f"Warning for {clean_domain}: SSL certificate expires in only {ssl_days_remaining} days."
+            + (f" Additionally, {missing_count} recommended hardening headers are missing." if missing_count else "")
         )
-    elif missing_count in (1, 2):
-        verdict = "Suspicious"
+    elif missing_count > 0:
+        # Missing headers alone: verdict stays "Safe", riskLevel "medium"
+        verdict = "Safe"
         risk_level = "medium"
         explanation = (
-            f"The website server for {clean_domain} has active encryption, but is missing {missing_count} defensive header(s): {', '.join(failed_headers)}."
+            f"This site works safely but is missing {missing_count} recommended hardening headers: {', '.join(failed_headers)}. "
+            "Note that HSTS may be enforced by the browser preload list even when the header is not sent."
         )
     else:
-        # All 5 headers passed!
+        # All 5 headers passed and no threat signals!
         verdict = "Safe"
         risk_level = "low"
         explanation = (

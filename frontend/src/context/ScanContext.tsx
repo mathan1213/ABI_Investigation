@@ -96,12 +96,82 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const [repoScan, setRepoScanState] = useState<RepoScanResult | null>(() => {
     const saved = localStorage.getItem('abi_repo_scan');
-    return saved ? JSON.parse(saved) : null;
+    if (saved) return JSON.parse(saved);
+    return {
+      repoUrl: 'https://github.com/OWASP/NodeGoat',
+      repoName: 'OWASP/NodeGoat',
+      riskScore: 100,
+      riskLevel: 'critical',
+      summary: "We discovered 33 security issues across 93 scanned files in 'OWASP/NodeGoat', including 1 critical and 17 high severity alerts. Exposed credentials and vulnerable components should be addressed immediately.",
+      branch: 'master',
+      scannedFilesCount: 93,
+      timestamp: new Date().toISOString(),
+      counts: {
+        critical: 1,
+        high: 17,
+        medium: 15,
+        low: 0,
+        total: 33,
+      },
+      findings: [
+        {
+          id: 'find-1',
+          category: 'dependencies',
+          severity: 'high',
+          title: 'Vulnerable npm Package: body-parser (GHSA-qwcr-r2fm-qrc7)',
+          filePath: 'package.json',
+          lineNumber: 1,
+          explanation: "Package 'body-parser' contains a known security flaw allowing denial of service when processing requests.",
+          suggestedFix: "Upgrade 'body-parser' to version 1.20.3 or higher.",
+          codeSnippet: '"body-parser": "~1.12.0"'
+        },
+        {
+          id: 'find-2',
+          category: 'code',
+          severity: 'high',
+          title: 'Dangerous eval() Call Detected',
+          filePath: 'app/routes/allocations.js',
+          lineNumber: 48,
+          explanation: "The code uses 'eval()', executing user-controlled input as raw JavaScript code.",
+          suggestedFix: 'Replace eval() with safe JSON.parse() or structured parsing.',
+          codeSnippet: 'threshold = eval(req.body.threshold);'
+        },
+        {
+          id: 'find-3',
+          category: 'network',
+          severity: 'medium',
+          title: 'Insecure Unencrypted HTTP Connection',
+          filePath: 'config/env/development.js',
+          lineNumber: 14,
+          explanation: 'The application connects to an unencrypted HTTP URL over plaintext.',
+          suggestedFix: 'Switch address to secure HTTPS (https://).',
+          codeSnippet: 'apiUrl: "http://api.internal-dev.net"'
+        }
+      ]
+    };
   });
 
   const [networkScan, setNetworkScanState] = useState<NetworkScanResult>(() => {
     const saved = localStorage.getItem('abi_net_scan');
-    return saved ? JSON.parse(saved) : {};
+    if (saved) return JSON.parse(saved);
+    return {
+      ipResult: {
+        ip: '8.8.8.8',
+        country: 'United States',
+        city: 'Ashburn',
+        isp: 'Google LLC',
+        asn: 'AS15169 Google LLC',
+        isVpn: false,
+        isProxy: false,
+        isTor: false,
+        isHosting: true,
+        abuseScore: 0,
+        verdict: 'Safe',
+        riskLevel: 'low',
+        explanation: 'This IP address belongs to verified public infrastructure (Google LLC) in United States. It is recognized as trusted service infrastructure with zero malicious activity.',
+        timestamp: new Date().toISOString(),
+      }
+    };
   });
 
   const [recentScans, setRecentScans] = useState<RecentScan[]>(() => {

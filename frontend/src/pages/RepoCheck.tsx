@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   GitBranch,
@@ -34,43 +34,50 @@ import {
 
 const SCAN_MESSAGES = [
   'Cloning repository tree and branch metadata...',
-  'Scanning file history for hardcoded API keys & passwords...',
-  'Checking software dependencies against CVE vulnerability databases...',
-  'Inspecting source files for dangerous functions like eval()...',
-  'Analyzing server configurations for unencrypted web addresses...',
-  'Compiling plain-English fixes for your development team...',
+  'Scanning files for leaked API keys, tokens & credentials...',
+  'Checking software dependencies against OSV.dev CVE database...',
+  'Running static code security analysis with Bandit...',
+  'Auditing web connections and container port exposure...',
+  'Compiling plain-English remediation report...',
 ];
 
 const EXAMPLE_REPOS = [
-  'https://github.com/my-project/api-backend',
+  'https://github.com/OWASP/NodeGoat',
   'https://github.com/expressjs/express',
-  'https://github.com/torvalds/linux',
+  'https://github.com/pallets/flask',
 ];
 
 export const RepoCheck: React.FC = () => {
-  const { repoScan, setRepoScan } = useScan();
-  const [repoUrl, setRepoUrl] = useState(repoScan ? repoScan.repoUrl : 'https://github.com/my-project/api-backend');
+  const { repoScan, setRepoScan, addToast } = useScan();
+  const [repoUrl, setRepoUrl] = useState(repoScan ? repoScan.repoUrl : 'https://github.com/OWASP/NodeGoat');
   const [isScanning, setIsScanning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'all' | RepoFindingCategory>('all');
 
   const validateUrl = (url: string) => {
-    return url.includes('github.com') && url.trim().length > 18;
+    return /^https:\/\/github\.com\/[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.]+/.test(url.trim());
   };
 
   const handleScan = async (targetUrl = repoUrl) => {
-    if (!validateUrl(targetUrl)) {
-      setErrorMsg('Please enter a valid GitHub repository URL (e.g., https://github.com/user/project).');
+    const trimmed = targetUrl.trim();
+    if (!validateUrl(trimmed)) {
+      setErrorMsg('Please enter a valid GitHub repository URL (e.g. https://github.com/owner/repository).');
       return;
     }
     setErrorMsg(null);
     setIsScanning(true);
 
     try {
-      const result: RepoScanResult = await scanRepo(targetUrl);
+      const result: RepoScanResult = await scanRepo(trimmed);
       setRepoScan(result);
-    } catch {
-      setErrorMsg('Failed to inspect repository. Please confirm the repository is public.');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to inspect repository. Please confirm the repository is public.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Repository Scan Failed',
+        message: msg,
+      });
     } finally {
       setIsScanning(false);
     }
@@ -78,13 +85,19 @@ export const RepoCheck: React.FC = () => {
 
   const scanData = repoScan;
 
+  // Dynamic counts by category
+  const secretCount = useMemo(() => scanData?.findings.filter((f) => f.category === 'secrets').length || 0, [scanData]);
+  const depCount = useMemo(() => scanData?.findings.filter((f) => f.category === 'dependencies').length || 0, [scanData]);
+  const codeCount = useMemo(() => scanData?.findings.filter((f) => f.category === 'code').length || 0, [scanData]);
+  const netCount = useMemo(() => scanData?.findings.filter((f) => f.category === 'network').length || 0, [scanData]);
+
   // Chart data for findings by category
-  const categoryChartData = [
-    { name: 'Secrets', count: 1, color: '#EF4444' },
-    { name: 'Dependencies', count: 1, color: '#F97316' },
-    { name: 'Code Issues', count: 1, color: '#EAB308' },
-    { name: 'Network', count: 2, color: '#06B6D4' },
-  ];
+  const categoryChartData = useMemo(() => [
+    { name: 'Secrets', count: secretCount, color: '#EF4444' },
+    { name: 'Dependencies', count: depCount, color: '#F97316' },
+    { name: 'Code Issues', count: codeCount, color: '#EAB308' },
+    { name: 'Network', count: netCount, color: '#06B6D4' },
+  ], [secretCount, depCount, codeCount, netCount]);
 
   const filteredFindings = scanData
     ? activeTab === 'all'
@@ -293,7 +306,7 @@ export const RepoCheck: React.FC = () => {
                 }`}
               >
                 <KeyRound size={13} className="text-red-400" />
-                <span>Secrets (1)</span>
+                <span>Secrets ({secretCount})</span>
               </button>
 
               <button
@@ -305,7 +318,7 @@ export const RepoCheck: React.FC = () => {
                 }`}
               >
                 <Package size={13} className="text-orange-400" />
-                <span>Vulnerable Dependencies (1)</span>
+                <span>Vulnerable Dependencies ({depCount})</span>
               </button>
 
               <button
@@ -317,7 +330,7 @@ export const RepoCheck: React.FC = () => {
                 }`}
               >
                 <Code size={13} className="text-yellow-400" />
-                <span>Code Issues (1)</span>
+                <span>Code Issues ({codeCount})</span>
               </button>
 
               <button
@@ -329,7 +342,7 @@ export const RepoCheck: React.FC = () => {
                 }`}
               >
                 <Network size={13} className="text-cyan-400" />
-                <span>Network Issues (2)</span>
+                <span>Network Issues ({netCount})</span>
               </button>
             </div>
 

@@ -22,11 +22,18 @@ class Settings(BaseSettings):
     # Optional third-party threat intelligence keys
     ABUSEIPDB_KEY: Optional[str] = None
     VIRUSTOTAL_KEY: Optional[str] = None
+    GITHUB_TOKEN: Optional[str] = None
 
     # Safety limits
     REQUEST_TIMEOUT_SECONDS: float = 5.0
     PORT_CHECK_TIMEOUT_SECONDS: float = 2.0
     RATE_LIMIT_PER_MINUTE: int = 20
+    REPO_RATE_LIMIT_PER_MINUTE: int = 5
+    REPO_CLONE_TIMEOUT_SECONDS: float = 60.0
+    REPO_OVERALL_TIMEOUT_SECONDS: float = 120.0
+    REPO_MAX_FILES: int = 3000
+    REPO_MAX_FILE_BYTES: int = 1024 * 1024  # 1 MB
+    REPO_MAX_SIZE_KB: int = 100 * 1024  # 100 MB
     MAX_REDIRECT_HOPS: int = 8
     TOR_EXIT_CACHE_HOURS: int = 6
 

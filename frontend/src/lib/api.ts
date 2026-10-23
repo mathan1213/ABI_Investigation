@@ -202,95 +202,30 @@ export async function analyzeTelegram(phone: string, otp: string): Promise<Teleg
 
 /**
  * Scans a public GitHub repository for leaked passwords, API keys, vulnerable packages, and unsafe code.
- * TODO: real backend (POST /api/v1/repo/scan)
+ * Real backend endpoint: POST /api/repo/scan
  */
 export async function scanRepo(repoUrl: string): Promise<RepoScanResult> {
-  await wait(1800);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/repo/scan`, {
-  //   method: 'POST',
-  //   headers: { 'Content-Type': 'application/json' },
-  //   body: JSON.stringify({ repo_url: repoUrl }),
-  // });
-  // return await res.json();
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/repo/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl: repoUrl.trim() }),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error("The repository scan timed out after 2 minutes. The repository may be very large or taking longer to process.");
+    }
+    throw new Error("Cannot reach the analysis server. Is the backend running?");
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
-  const repoName = repoUrl.replace(/^https?:\/\/github\.com\//i, '').replace(/\/$/, '') || 'my-project/api-backend';
-
-  return {
-    repoUrl,
-    repoName,
-    riskScore: 72,
-    riskLevel: 'high',
-    summary: 'We found an exposed API password in a public file, an outdated software component with known security flaws, and an insecure web connection.',
-    branch: 'main',
-    scannedFilesCount: 84,
-    timestamp: new Date().toISOString(),
-    counts: {
-      critical: 1,
-      high: 2,
-      medium: 1,
-      low: 1,
-      total: 5,
-    },
-    findings: [
-      {
-        id: 'repo-1',
-        category: 'secrets',
-        severity: 'critical',
-        title: 'Secret API Password Left in Code',
-        filePath: 'config/settings.py',
-        lineNumber: 42,
-        explanation: 'A live Stripe API secret key was written directly into this file. Anyone browsing this public repository can copy it and charge cards or access customer billing.',
-        suggestedFix: 'Revoke this API key inside your Stripe Dashboard immediately. Move secrets into private environment variables (.env) and add .env to your .gitignore file.',
-        codeSnippet: 'STRIPE_SECRET_KEY = "sk_test_mock_secret_key_placeholder..."',
-      },
-      {
-        id: 'repo-2',
-        category: 'dependencies',
-        severity: 'high',
-        title: 'Vulnerable "requests" Library (Security Bug CVE-2023-32681)',
-        filePath: 'requirements.txt',
-        lineNumber: 14,
-        explanation: 'This project uses an old version of the "requests" helper package (v2.28.1). Hackers can trick it into leaking login credentials when visiting redirected websites.',
-        suggestedFix: 'Update "requests" to version 2.31.0 or newer by running "pip install --upgrade requests".',
-        codeSnippet: 'requests==2.28.1',
-      },
-      {
-        id: 'repo-3',
-        category: 'code',
-        severity: 'high',
-        title: 'Dangerous eval() Command Used',
-        filePath: 'services/parser.py',
-        lineNumber: 88,
-        explanation: 'The code uses "eval()", which executes incoming text as raw computer code. If an attacker inputs malicious text, your server will run their commands.',
-        suggestedFix: 'Replace eval() with safe alternatives like json.loads() or ast.literal_eval(). Never run eval() on untrusted user data.',
-        codeSnippet: 'user_formula = eval(request.GET.get("calc"))',
-      },
-      {
-        id: 'repo-4',
-        category: 'network',
-        severity: 'medium',
-        title: 'Insecure Unencrypted Web Address (HTTP)',
-        filePath: 'src/api/client.ts',
-        lineNumber: 19,
-        explanation: 'Your app connects to "http://api.internal-sync.io" without encryption. Anyone on the same Wi-Fi network can view or modify the data being sent.',
-        suggestedFix: 'Change the address to use secure HTTPS: "https://api.internal-sync.io".',
-        codeSnippet: 'const BASE_URL = "http://api.internal-sync.io/v1";',
-      },
-      {
-        id: 'repo-5',
-        category: 'network',
-        severity: 'low',
-        title: 'Database Port Exposed in Compose File',
-        filePath: 'docker-compose.yml',
-        lineNumber: 27,
-        explanation: 'The PostgreSQL database port (5432) is mapped to the public internet instead of staying inside your private server network.',
-        suggestedFix: 'Bind the port to localhost only: "127.0.0.1:5432:5432" or remove the public ports directive if only other containers need access.',
-        codeSnippet: 'ports:\n  - "0.0.0.0:5432:5432"',
-      }
-    ]
-  };
+  return await handleResponse<RepoScanResult>(res, 'Failed to inspect repository');
 }
 
 /**

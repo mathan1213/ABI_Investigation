@@ -226,11 +226,47 @@ async def test_website_headers_from_final_redirect():
                 assert headers_map["Content-Security-Policy"] == "Fail"
                 assert headers_map["Referrer-Policy"] == "Fail"
 
-                # Verdict should be Suspicious because 2 headers failed
-                assert data["verdict"] == "Suspicious"
+                # Missing headers alone: verdict stays Safe, riskLevel medium
+                assert data["verdict"] == "Safe"
+                assert data["riskLevel"] == "medium"
+                assert "This site works safely but is missing 2 recommended hardening headers" in data["explanation"]
                 assert "Content-Security-Policy" in data["explanation"]
                 assert "Referrer-Policy" in data["explanation"]
+                assert "HSTS may be enforced by the browser preload list" in data["explanation"]
                 assert "well-hardened" not in data["explanation"]
+
+
+@pytest.mark.asyncio
+async def test_website_real_threat_signal_ports():
+    """Real threat signals like exposed SSH port 22 make verdict Dangerous."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.is_redirect = False
+    resp.headers = {
+        "strict-transport-security": "max-age=31536000",
+        "content-security-policy": "default-src 'self'",
+        "x-frame-options": "DENY",
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+    }
+
+    with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+        mock_val.return_value = ["93.184.216.34"]
+        with patch("modules.network_module.check_single_port", new_callable=AsyncMock) as mock_port:
+            async def fake_ports(host, p):
+                return (p, "Open" if p in (80, 443, 22) else "Closed")
+            mock_port.side_effect = fake_ports
+
+            with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+                mock_get.return_value = resp
+
+                response = client.post("/api/network/website", json={"domain": "insecure.example.com"})
+                assert response.status_code == 200
+                data = response.json()
+
+                assert data["verdict"] == "Dangerous"
+                assert data["riskLevel"] == "critical"
+                assert "administrative ports" in data["explanation"]
 
 
 @pytest.mark.asyncio

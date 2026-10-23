@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from models import HealthResponse
 from routers.network import router as network_router
+from routers.repo import router as repo_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -23,6 +24,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(network_router)
+app.include_router(repo_router)
 
 
 # ---------------------------------------------------------------------------

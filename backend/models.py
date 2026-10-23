@@ -117,7 +117,50 @@ class WebsiteCheckResponse(AppBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 4. Health Check Model
+# 4. Repo Check Models
+# ---------------------------------------------------------------------------
+
+RepoFindingCategory = Literal["secrets", "dependencies", "code", "network"]
+
+class RepoFinding(AppBaseModel):
+    id: str
+    category: RepoFindingCategory
+    severity: RiskLevel
+    title: str
+    file_path: str = Field(..., alias="filePath")
+    line_number: int = Field(..., alias="lineNumber")
+    explanation: str
+    suggested_fix: str = Field(..., alias="suggestedFix")
+    code_snippet: Optional[str] = Field(default=None, alias="codeSnippet")
+
+
+class FindingCounts(AppBaseModel):
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    total: int = 0
+
+
+class RepoScanRequest(AppBaseModel):
+    repo_url: str = Field(..., alias="repoUrl", description="GitHub repository URL", examples=["https://github.com/owner/repository"])
+
+
+class RepoScanResponse(AppBaseModel):
+    repo_url: str = Field(..., alias="repoUrl")
+    repo_name: str = Field(..., alias="repoName")
+    risk_score: int = Field(..., alias="riskScore", ge=0, le=100)
+    risk_level: RiskLevel = Field(..., alias="riskLevel")
+    summary: str
+    counts: FindingCounts
+    findings: List[RepoFinding]
+    timestamp: str
+    branch: str = "main"
+    scanned_files_count: int = Field(default=0, alias="scannedFilesCount")
+
+
+# ---------------------------------------------------------------------------
+# 5. Health Check Model
 # ---------------------------------------------------------------------------
 
 class HealthResponse(AppBaseModel):
