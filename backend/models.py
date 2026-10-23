@@ -1,4 +1,4 @@
-from typing import Literal, Optional, List
+from typing import Any, Literal, Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
 RiskLevel = Literal["low", "medium", "high", "critical"]
@@ -240,7 +240,79 @@ class TelegramCancelResponse(AppBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 6. Health Check Model
+# 6. Report Generation Models
+# ---------------------------------------------------------------------------
+
+class NetworkScanInput(AppBaseModel):
+    ip_result: Optional[IpCheckResponse] = Field(default=None, alias="ipResult")
+    link_result: Optional[LinkCheckResponse] = Field(default=None, alias="linkResult")
+    website_result: Optional[WebsiteCheckResponse] = Field(default=None, alias="websiteResult")
+
+
+class GenerateReportRequest(AppBaseModel):
+    telegram: Optional[TelegramScanResult] = None
+    repo: Optional[RepoScanResponse] = None
+    network: Optional[Any] = None
+    demo_modules: List[str] = Field(default_factory=list, alias="demoModules")
+
+
+class ModuleScore(AppBaseModel):
+    module: str
+    name: str
+    scanned: bool
+    score: Optional[int] = None
+    risk_level: Optional[RiskLevel] = Field(default=None, alias="riskLevel")
+    is_demo: bool = Field(default=False, alias="isDemo")
+    details: Optional[str] = None
+
+
+class NetworkFindingItem(AppBaseModel):
+    id: str
+    source: str
+    title: str
+    detail: str
+    severity: RiskLevel
+    target: Optional[str] = None
+
+
+class ActionPlanItem(AppBaseModel):
+    id: int
+    title: str
+    detail: str
+    priority: RiskLevel
+    completed: bool = False
+
+
+class ConnectedAccountItem(AppBaseModel):
+    name: str
+    service: str
+    connected_at: str = Field(..., alias="connectedAt")
+    status: str
+    is_demo: bool = Field(default=False, alias="isDemo")
+
+
+class GenerateReportResponse(AppBaseModel):
+    id: str
+    generated_at: str = Field(..., alias="generatedAt")
+    overall_score: int = Field(..., alias="overallScore", ge=0, le=100)
+    overall_risk: RiskLevel = Field(..., alias="overallRisk")
+    summary: str
+    how_it_happened: List[str] = Field(default_factory=list, alias="howItHappened")
+    what_to_do_now: List[ActionPlanItem] = Field(default_factory=list, alias="whatToDoNow")
+    action_plan: List[ActionPlanItem] = Field(default_factory=list, alias="actionPlan")
+    modules: List[ModuleScore]
+    network_findings: List[NetworkFindingItem] = Field(default_factory=list, alias="networkFindings")
+    limitations: List[str]
+    methodology: str
+    demo_modules: List[str] = Field(default_factory=list, alias="demoModules")
+    telegram: Optional[TelegramScanResult] = None
+    repo: Optional[RepoScanResponse] = None
+    network: Optional[Any] = None
+    connected_accounts: List[ConnectedAccountItem] = Field(default_factory=list, alias="connectedAccounts")
+
+
+# ---------------------------------------------------------------------------
+# 7. Health Check Model
 # ---------------------------------------------------------------------------
 
 class HealthResponse(AppBaseModel):

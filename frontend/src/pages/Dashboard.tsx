@@ -42,57 +42,81 @@ export const Dashboard: React.FC = () => {
     overallRisk,
     loadSampleData,
     hasAnyScan,
+    demoModules,
   } = useScan();
 
+  const isTgScanned = telegramScan !== null;
+  const isRepoScanned = repoScan !== null;
+  const isNetScanned = Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult);
+
   // Telegram card values
-  const tgScore = telegramScan ? telegramScan.riskScore : 78;
-  const tgLevel: RiskLevel = telegramScan ? telegramScan.riskLevel : 'critical';
-  const tgTitle = telegramScan ? telegramScan.phone : '+1 (555) 019-2834 (Sample)';
+  const tgScore = isTgScanned ? telegramScan.riskScore : null;
+  const tgLevel: RiskLevel = isTgScanned ? telegramScan.riskLevel : 'low';
+  const isTgDemo = isTgScanned && (demoModules.includes('telegram') || Boolean(telegramScan.isDemo));
 
   // Repo card values
-  const repoScore = repoScan ? repoScan.riskScore : 72;
-  const repoLevel: RiskLevel = repoScan ? repoScan.riskLevel : 'high';
-  const repoTitle = repoScan ? repoScan.repoName : 'my-project/api-backend (Sample)';
+  const repoScore = isRepoScanned ? repoScan.riskScore : null;
+  const repoLevel: RiskLevel = isRepoScanned ? repoScan.riskLevel : 'low';
+  const isRepoDemo = isRepoScanned && demoModules.includes('repo');
 
   // Network card values
-  const netScore = networkScan.ipResult
-    ? networkScan.ipResult.abuseScore
-    : networkScan.websiteResult
-    ? networkScan.websiteResult.riskScore
-    : 89;
-  const netLevel: RiskLevel = networkScan.ipResult
-    ? networkScan.ipResult.riskLevel
-    : 'critical';
+  const netScores: number[] = [];
+  if (networkScan.ipResult) netScores.push(networkScan.ipResult.abuseScore);
+  if (networkScan.linkResult) netScores.push(100 - networkScan.linkResult.reputationScore);
+  if (networkScan.websiteResult) netScores.push(networkScan.websiteResult.riskScore);
+
+  const netScore = isNetScanned && netScores.length > 0 ? Math.max(...netScores) : null;
+  const netLevel: RiskLevel = isNetScanned
+    ? (networkScan.ipResult?.riskLevel === 'critical' || networkScan.websiteResult?.riskLevel === 'critical'
+      ? 'critical'
+      : (netScore ?? 0) >= 50 ? 'high' : (netScore ?? 0) >= 25 ? 'medium' : 'low')
+    : 'low';
+  const isNetDemo = isNetScanned && demoModules.includes('network');
   const netTitle = networkScan.ipResult
     ? networkScan.ipResult.ip
     : networkScan.websiteResult
     ? networkScan.websiteResult.domain
-    : '185.220.101.5 (Sample)';
+    : networkScan.linkResult
+    ? networkScan.linkResult.url
+    : 'No network check';
 
   // Recharts Chart Data: Findings by Risk Level (Donut)
-  const donutData = [
-    { name: 'Critical', value: telegramScan ? telegramScan.findings.filter(f => f.risk === 'critical').length : 3, color: '#EF4444' },
-    { name: 'High', value: (repoScan?.counts.high ?? 2) + (telegramScan ? telegramScan.findings.filter(f => f.risk === 'high').length : 2), color: '#F97316' },
-    { name: 'Medium', value: (repoScan?.counts.medium ?? 1) + 1, color: '#EAB308' },
-    { name: 'Low', value: (repoScan?.counts.low ?? 1) + 2, color: '#10B981' },
-  ];
+  const critCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'critical').length ?? 0) +
+    (repoScan?.counts.critical ?? 0) +
+    (networkScan.ipResult?.riskLevel === 'critical' ? 1 : 0);
+  const highCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'high').length ?? 0) +
+    (repoScan?.counts.high ?? 0) +
+    (networkScan.websiteResult?.riskLevel === 'high' ? 1 : 0);
+  const medCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'medium').length ?? 0) +
+    (repoScan?.counts.medium ?? 0);
+  const lowCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'low').length ?? 0) +
+    (repoScan?.counts.low ?? 0);
+
+  const donutData = hasAnyScan
+    ? [
+        { name: 'Critical', value: critCount, color: '#EF4444' },
+        { name: 'High', value: highCount, color: '#F97316' },
+        { name: 'Medium', value: medCount, color: '#EAB308' },
+        { name: 'Low', value: lowCount, color: '#10B981' },
+      ].filter((d) => d.value > 0)
+    : [{ name: 'No Scans', value: 1, color: '#334155' }];
 
   // Recharts Chart Data: Findings per Module (Bar)
   const barData = [
-    { module: 'Telegram', issues: telegramScan ? telegramScan.findings.length : 5 },
-    { module: 'Repo Code', issues: repoScan ? repoScan.counts.total : 5 },
-    { module: 'Network/IP', issues: networkScan.ipResult ? (networkScan.ipResult.abuseScore > 0 ? 3 : 0) : 3 },
-    { module: 'Web SSL', issues: networkScan.websiteResult ? 2 : 2 },
+    { module: 'Telegram', issues: isTgScanned ? telegramScan.findings.length : 0 },
+    { module: 'Repo Code', issues: isRepoScanned ? repoScan.counts.total : 0 },
+    { module: 'Network/IP', issues: networkScan.ipResult ? (networkScan.ipResult.abuseScore > 0 ? 1 : 0) : 0 },
+    { module: 'Web SSL', issues: networkScan.websiteResult ? networkScan.websiteResult.ports.filter(p => p.state === 'Open').length : 0 },
   ];
 
   // Recharts Chart Data: Risk Score Over Recent Scans (Line)
-  const lineData = [
-    { scan: 'Scan 1', score: 32 },
-    { scan: 'Scan 2', score: 45 },
-    { scan: 'Scan 3', score: 60 },
-    { scan: 'Scan 4', score: 85 },
-    { scan: 'Latest', score: overallScore },
-  ];
+  const lineData = recentScans.length > 0
+    ? recentScans.slice(0, 5).reverse().map((s, idx) => ({ scan: `Scan ${idx + 1}`, score: s.score }))
+    : [{ scan: 'Initial', score: overallScore }];
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -103,11 +127,15 @@ export const Dashboard: React.FC = () => {
             <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 bg-cyan-500/10 px-2.5 py-0.5 rounded-full border border-cyan-500/20">
               Active Security Dashboard
             </span>
-            {!hasAnyScan && (
-              <span className="text-xs text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
-                Sample preview mode
+            {demoModules.length > 0 ? (
+              <span className="text-xs text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30 font-semibold">
+                Demo Data Active ({demoModules.join(', ')})
               </span>
-            )}
+            ) : !hasAnyScan ? (
+              <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
+                No scans performed yet
+              </span>
+            ) : null}
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             Account Breach Investigation
@@ -119,15 +147,13 @@ export const Dashboard: React.FC = () => {
 
         {/* Demo Helper Button */}
         <div className="flex items-center gap-3">
-          {!hasAnyScan && (
-            <button
-              onClick={loadSampleData}
-              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-cyan-300 border border-slate-700 shadow-sm transition-all"
-            >
-              <Sparkles size={14} className="text-cyan-400" />
-              <span>Load Full Sample Incident</span>
-            </button>
-          )}
+          <button
+            onClick={loadSampleData}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-cyan-300 border border-slate-700 shadow-sm transition-all"
+          >
+            <Sparkles size={14} className="text-cyan-400" />
+            <span>Load Sample Incident (Demo Data)</span>
+          </button>
           <Link
             to="/report"
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold transition-all shadow-glow hover:shadow-glow-lg"
@@ -142,35 +168,35 @@ export const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Overall Threat Score"
-          value={`${overallScore}%`}
+          value={hasAnyScan ? `${overallScore}%` : '0%'}
           level={overallRisk}
           icon={ShieldAlert}
-          subtitle="Weighted risk across all monitored assets"
-          badgeLabel={overallRisk === 'critical' ? 'Urgent Alert' : 'Active Status'}
+          subtitle={hasAnyScan ? 'Composite risk across scanned assets' : 'No scans completed yet'}
+          badgeLabel={!hasAnyScan ? 'No Scans' : demoModules.length > 0 ? 'Demo Active' : overallRisk === 'critical' ? 'Urgent Alert' : 'Active Status'}
         />
         <StatCard
           title="Telegram Risk"
-          value={`${tgScore}%`}
+          value={isTgScanned && tgScore !== null ? `${tgScore}%` : 'Not scanned yet'}
           level={tgLevel}
           icon={Send}
-          subtitle={telegramScan ? 'Live verified session' : tgTitle}
-          badgeLabel={tgLevel === 'critical' ? 'Breached' : 'Secure'}
+          subtitle={isTgScanned ? `${telegramScan.phone} • ${telegramScan.accountName}` : 'No phone linked yet'}
+          badgeLabel={!isTgScanned ? 'Not Scanned' : isTgDemo ? 'Demo Data' : tgScore! > 50 ? 'Compromised' : 'Clean'}
         />
         <StatCard
           title="Repo Security Risk"
-          value={`${repoScore}%`}
+          value={isRepoScanned && repoScore !== null ? `${repoScore}%` : 'Not scanned yet'}
           level={repoLevel}
           icon={GitBranch}
-          subtitle={repoScan ? repoScan.repoName : repoTitle}
-          badgeLabel={repoLevel === 'high' ? 'Secrets Found' : 'Clean'}
+          subtitle={isRepoScanned ? repoScan.repoName : 'No repository analyzed'}
+          badgeLabel={!isRepoScanned ? 'Not Scanned' : isRepoDemo ? 'Demo Data' : repoScore! > 50 ? 'Secrets Found' : 'Clean'}
         />
         <StatCard
           title="Network & IP Risk"
-          value={`${netScore}%`}
+          value={isNetScanned && netScore !== null ? `${netScore}%` : 'Not scanned yet'}
           level={netLevel}
           icon={Network}
-          subtitle={netTitle}
-          badgeLabel={netLevel === 'critical' ? 'Hostile IP' : 'Safe IP'}
+          subtitle={isNetScanned ? netTitle : 'No network target tested'}
+          badgeLabel={!isNetScanned ? 'Not Scanned' : isNetDemo ? 'Demo Data' : netLevel === 'critical' ? 'Hostile IP' : 'Inspected'}
         />
       </div>
 

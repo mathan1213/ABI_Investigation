@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   FileText,
@@ -17,12 +17,15 @@ import {
   Calendar,
   AlertTriangle,
   RotateCcw,
+  Loader2,
+  Info,
 } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
 import { RiskGauge } from '../components/RiskGauge';
 import { RiskBadge } from '../components/RiskBadge';
 import { EmptyState } from '../components/EmptyState';
-import { RiskLevel } from '../lib/types';
+import { FullReport, RiskLevel, NetworkFindingItem, ActionPlanItem } from '../lib/types';
+import { getReport } from '../lib/api';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
@@ -38,21 +41,71 @@ export const Report: React.FC = () => {
     telegramScan,
     repoScan,
     networkScan,
-    overallScore,
-    overallRisk,
+    overallScore: ctxScore,
+    overallRisk: ctxRisk,
     hasAnyScan,
+    demoModules,
     loadSampleData,
     addToast,
   } = useScan();
 
+  const [reportData, setReportData] = useState<FullReport | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [completedSteps, setCompletedSteps] = useState<Record<number, boolean>>({});
   const reportRef = useRef<HTMLDivElement>(null);
+
+  // Fetch synthesized report from real backend risk engine
+  useEffect(() => {
+    let isMounted = true;
+    if (!hasAnyScan) {
+      setReportData(null);
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchReport = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const data = await getReport({
+          telegram: telegramScan,
+          repo: repoScan,
+          network: networkScan,
+          demoModules,
+        });
+        if (isMounted) {
+          setReportData(data);
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          setError(err?.message || 'Failed to synthesize investigation report.');
+          addToast({
+            type: 'error',
+            title: 'Report Synthesis Notice',
+            message: err?.message || 'Using local report representation.',
+          });
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchReport();
+    return () => {
+      isMounted = false;
+    };
+  }, [telegramScan, repoScan, networkScan, demoModules, hasAnyScan]);
 
   const toggleStep = (id: number) => {
     setCompletedSteps((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // High-Resolution Multi-page PDF Export with Professional Title & Disclaimer Footer
   const handleDownloadPdf = async () => {
     if (!reportRef.current) return;
     setIsExporting(true);
@@ -60,8 +113,8 @@ export const Report: React.FC = () => {
     try {
       addToast({
         type: 'info',
-        title: 'Rendering PDF Report',
-        message: 'Converting high-resolution investigation dossier to PDF...',
+        title: 'Rendering Investigation Dossier',
+        message: 'Building high-resolution PDF with official cover page and risk disclaimer...',
       });
 
       const element = reportRef.current;
@@ -84,14 +137,40 @@ export const Report: React.FC = () => {
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
       let heightLeft = imgHeight;
       let position = 0;
+      let pageNum = 1;
 
+      // First Page
       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+
+      // Add Running Footer on Page 1
+      pdf.setFontSize(8);
+      pdf.setTextColor(148, 163, 184); // Slate-400
+      pdf.text(
+        'This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach. • Page 1',
+        105,
+        292,
+        { align: 'center' }
+      );
+
       heightLeft -= pageHeight;
 
+      // Subsequent Pages
       while (heightLeft > 5) {
         position = heightLeft - imgHeight;
         pdf.addPage();
+        pageNum += 1;
         pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+
+        // Add Running Footer on every page
+        pdf.setFontSize(8);
+        pdf.setTextColor(148, 163, 184);
+        pdf.text(
+          `This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach. • Page ${pageNum}`,
+          105,
+          292,
+          { align: 'center' }
+        );
+
         heightLeft -= pageHeight;
       }
 
@@ -100,8 +179,8 @@ export const Report: React.FC = () => {
 
       addToast({
         type: 'success',
-        title: 'Report Download Complete',
-        message: 'Your official investigation PDF has been saved.',
+        title: 'PDF Download Complete',
+        message: `Saved ${pageNum}-page investigation report dossier.`,
       });
     } catch (err) {
       console.error('PDF Generation failed:', err);
@@ -140,54 +219,55 @@ export const Report: React.FC = () => {
           description="We need at least one completed scan to generate your breach investigation report. You can link your Telegram, check a public GitHub repository, or test a suspicious network address."
           actionText="Link Telegram to Start"
           actionLink="/telegram"
-          secondaryActionText="Load Sample Report Incident"
+          secondaryActionText="Load Sample Report Incident (Demo Data)"
           onSecondaryAction={loadSampleData}
         />
       </div>
     );
   }
 
-  // Prepared data
-  const reportDate = new Date().toLocaleDateString('en-US', {
+  // Prepared data from risk engine
+  const reportDate = reportData?.generatedAt || new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   });
 
-  const chartData = [
-    { name: 'Critical Risk', value: 2, color: '#EF4444' },
-    { name: 'High Risk', value: 3, color: '#F97316' },
-    { name: 'Medium Risk', value: 1, color: '#EAB308' },
-    { name: 'Low Risk', value: 2, color: '#10B981' },
-  ];
+  const displayScore = reportData ? reportData.overallScore : ctxScore;
+  const displayRisk = reportData ? reportData.overallRisk : ctxRisk;
+  const displaySummary = reportData ? reportData.summary : 'Compiling security findings across channels...';
+  const displayHowItHappened = reportData?.howItHappened || [];
+  const displayActions: ActionPlanItem[] = reportData?.whatToDoNow || reportData?.actionPlan || [];
+  const displayNetworkFindings: NetworkFindingItem[] = reportData?.networkFindings || [];
+  const displayModules = reportData?.modules || [];
+  const displayLimitations = reportData?.limitations || [];
+  const displayMethodology =
+    reportData?.methodology ||
+    'Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed modules. If any module contains a finding with Critical severity, the composite risk rating is elevated to at least High.';
+  const isAnyDemo = (reportData?.demoModules && reportData.demoModules.length > 0) || demoModules.length > 0;
 
-  const defaultActions = [
-    {
-      id: 1,
-      title: "Disconnect all unauthorized Telegram devices",
-      detail: "Go to Telegram Settings > Devices > Terminate all other sessions to boot out unauthorized connections in Germany.",
-    },
-    {
-      id: 2,
-      title: "Turn on Telegram Two-Step Password",
-      detail: "Go to Settings > Privacy and Security > Two-Step Verification. Set a strong password so SMS codes alone cannot access your account.",
-    },
-    {
-      id: 3,
-      title: "Revoke leaked API keys from GitHub",
-      detail: "Roll the Stripe secret key found in config/settings.py immediately. Anyone who saw the repository has your billing privileges.",
-    },
-    {
-      id: 4,
-      title: "Upgrade vulnerable software packages",
-      detail: "Update 'requests' library to version 2.31.0 to close security flaw CVE-2023-32681.",
-    },
-    {
-      id: 5,
-      title: "Block access to SSH Port 22 on your website server",
-      detail: "Close port 22 in your cloud provider's firewall so attackers cannot brute-force administrative access.",
-    },
-  ];
+  // Chart data
+  const critCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'critical').length ?? 0) +
+    (repoScan?.counts.critical ?? 0) +
+    (networkScan.ipResult?.riskLevel === 'critical' ? 1 : 0);
+  const highCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'high').length ?? 0) +
+    (repoScan?.counts.high ?? 0) +
+    (networkScan.websiteResult?.riskLevel === 'high' ? 1 : 0);
+  const medCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'medium').length ?? 0) +
+    (repoScan?.counts.medium ?? 0);
+  const lowCount =
+    (telegramScan?.findings.filter((f) => f.risk === 'low').length ?? 0) +
+    (repoScan?.counts.low ?? 0);
+
+  const chartData = [
+    { name: 'Critical Risk', value: critCount, color: '#EF4444' },
+    { name: 'High Risk', value: highCount, color: '#F97316' },
+    { name: 'Medium Risk', value: medCount, color: '#EAB308' },
+    { name: 'Low Risk', value: lowCount, color: '#10B981' },
+  ].filter((d) => d.value > 0);
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fadeIn">
@@ -225,29 +305,61 @@ export const Report: React.FC = () => {
         </div>
       </div>
 
+      {isLoading && (
+        <div className="glass-card rounded-2xl p-8 border border-slate-800 flex items-center justify-center gap-3 text-cyan-400 text-sm">
+          <Loader2 size={20} className="animate-spin" />
+          <span>Synthesizing cross-module findings with backend risk engine...</span>
+        </div>
+      )}
+
       {/* PRINTABLE / EXPORTABLE REPORT CONTAINER */}
       <div
         ref={reportRef}
         id="investigation-report-content"
         className="glass-card rounded-2xl p-6 sm:p-10 border border-slate-800 space-y-8 bg-[#0B1220]"
       >
-        {/* Report Top Header */}
+        {/* Official Cover / Title Banner (Included in PDF & Print) */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-cyan-400 text-slate-950 flex items-center justify-center font-black shadow-glow">
-              <ShieldAlert size={28} />
+          <div className="flex items-center gap-3.5">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-400 text-slate-950 flex items-center justify-center font-black shadow-glow shrink-0">
+              <ShieldAlert size={32} />
             </div>
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-                Official Cyber Incident Dossier
+              <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-400 block">
+                Account Breach Investigation • Cyber Incident Dossier
               </span>
-              <h2 className="text-xl font-extrabold text-white">Investigation Report</h2>
-              <span className="text-xs text-slate-400">Reference: ABI-2026-X992 • Generated {reportDate}</span>
+              <h2 className="text-2xl font-black text-white tracking-tight">
+                Official Security Investigation Report
+              </h2>
+              <span className="text-xs text-slate-400">
+                Reference: {reportData?.id || 'ABI-REPORT-ONLINE'} • Generated {reportDate}
+              </span>
             </div>
           </div>
 
-          <RiskBadge level={overallRisk} size="lg" />
+          <div className="shrink-0 flex items-center gap-2">
+            <RiskBadge level={displayRisk} size="lg" />
+          </div>
         </div>
+
+        {/* Prominent Demo Mode Banner (Visible in PDF, Print & Screen if any demo data used) */}
+        {isAnyDemo && (
+          <div className="p-4 rounded-xl bg-amber-500/10 border-2 border-amber-500/40 text-amber-300 text-xs flex items-start gap-3">
+            <AlertTriangle size={18} className="shrink-0 text-amber-400 mt-0.5" />
+            <div>
+              <span className="font-bold text-amber-200 block text-sm uppercase tracking-wide">
+                Demo Data Notice
+              </span>
+              <p className="text-slate-300 mt-0.5 leading-relaxed">
+                This investigation dossier incorporates simulated demonstration data for one or more modules{' '}
+                {reportData?.demoModules && reportData.demoModules.length > 0
+                  ? `(${reportData.demoModules.join(', ')})`
+                  : ''}
+                . Findings in demo-flagged sections are illustrative test scenarios and do not indicate a verified compromise on your real account.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Top Summary & Gauge */}
         <div className="p-6 rounded-2xl bg-[#111A2E] border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
@@ -256,31 +368,33 @@ export const Report: React.FC = () => {
               Executive Finding Summary
             </span>
             <h3 className="text-xl font-bold text-white leading-snug">
-              {overallScore >= 70
-                ? "Multiple high-risk security flaws and evidence of unauthorized access from another country were detected."
-                : "Your scanned assets appear predominantly safe with minor defensive improvements recommended."}
+              {displayRisk === 'critical' || displayRisk === 'high'
+                ? 'High security threat: critical vulnerabilities or active foreign intrusions require remediation.'
+                : displayRisk === 'medium'
+                ? 'Moderate exposure: defensive gaps were detected across audited infrastructure.'
+                : 'Defenses in good standing: no active intrusions or exposed credentials detected.'}
             </h3>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xl">
-              This report was automatically synthesized by evaluating session anomalies, public source repository leaks, and hostile IP network footprints.
+              {displaySummary}
             </p>
           </div>
 
           <div className="shrink-0 flex flex-col items-center">
-            <RiskGauge score={overallScore} level={overallRisk} size="md" />
+            <RiskGauge score={displayScore} level={displayRisk} size="md" />
           </div>
         </div>
 
-        {/* Section 1: What We Found */}
+        {/* Section 1: Per-Module Breakdown */}
         <div className="space-y-4">
           <div className="border-b border-slate-800 pb-2">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">1</span>
-              <span>What We Found Across Monitored Channels</span>
+              <span>Audited Modules & Forensic Status</span>
             </h3>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Telegram Channel */}
+            {/* Telegram Module */}
             <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -288,23 +402,30 @@ export const Report: React.FC = () => {
                     <Send size={14} />
                     <span>Telegram</span>
                   </div>
-                  <RiskBadge level={telegramScan ? telegramScan.riskLevel : 'critical'} size="sm" />
+                  <div className="flex items-center gap-1.5">
+                    {(demoModules.includes('telegram') || telegramScan?.isDemo) && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        Demo Data
+                      </span>
+                    )}
+                    <RiskBadge level={telegramScan ? telegramScan.riskLevel : 'low'} size="sm" />
+                  </div>
                 </div>
                 <h4 className="text-sm font-bold text-white mb-1">
-                  {telegramScan ? telegramScan.phone : '+1 (555) 019-2834'}
+                  {telegramScan ? telegramScan.phone : 'Not Scanned Yet'}
                 </h4>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {telegramScan
                     ? telegramScan.summary
-                    : "Foreign session logged in from Frankfurt, Germany. Two-step verification was disabled."}
+                    : 'Module not executed during this session. Run Telegram Check to inspect active sessions.'}
                 </p>
               </div>
               <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                {telegramScan ? `${telegramScan.sessions.length} devices inspected` : '3 sessions identified'}
+                {telegramScan ? `${telegramScan.sessions.length} session(s) audited` : 'No sessions tested'}
               </span>
             </div>
 
-            {/* Repo Channel */}
+            {/* Repo Module */}
             <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -312,136 +433,153 @@ export const Report: React.FC = () => {
                     <GitBranch size={14} />
                     <span>GitHub Code</span>
                   </div>
-                  <RiskBadge level={repoScan ? repoScan.riskLevel : 'high'} size="sm" />
+                  <div className="flex items-center gap-1.5">
+                    {demoModules.includes('repo') && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        Demo Data
+                      </span>
+                    )}
+                    <RiskBadge level={repoScan ? repoScan.riskLevel : 'low'} size="sm" />
+                  </div>
                 </div>
                 <h4 className="text-sm font-bold text-white mb-1 truncate">
-                  {repoScan ? repoScan.repoName : 'my-project/api-backend'}
+                  {repoScan ? repoScan.repoName : 'Not Scanned Yet'}
                 </h4>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {repoScan
                     ? repoScan.summary
-                    : "Live Stripe API secret key exposed in public commit history, and outdated requests package."}
+                    : 'Module not executed during this session. Run Repo Check to scan for leaked credentials.'}
                 </p>
               </div>
               <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                {repoScan ? `${repoScan.counts.total} code vulnerabilities` : '5 flaws uncovered'}
+                {repoScan ? `${repoScan.counts.total} finding(s) in ${repoScan.scannedFilesCount} file(s)` : 'No repo analyzed'}
               </span>
             </div>
 
-            {/* Network Channel */}
+            {/* Network Module */}
             <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase">
                     <Network size={14} />
-                    <span>Network & IP</span>
+                    <span>Network & Web</span>
                   </div>
-                  <RiskBadge
-                    level={networkScan.ipResult ? networkScan.ipResult.riskLevel : 'critical'}
-                    size="sm"
-                  />
+                  <div className="flex items-center gap-1.5">
+                    {demoModules.includes('network') && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                        Demo Data
+                      </span>
+                    )}
+                    <RiskBadge
+                      level={
+                        networkScan.ipResult
+                          ? networkScan.ipResult.riskLevel
+                          : networkScan.websiteResult
+                          ? networkScan.websiteResult.riskLevel
+                          : 'low'
+                      }
+                      size="sm"
+                    />
+                  </div>
                 </div>
                 <h4 className="text-sm font-bold text-white mb-1">
-                  {networkScan.ipResult ? networkScan.ipResult.ip : '185.220.101.5'}
+                  {networkScan.ipResult
+                    ? networkScan.ipResult.ip
+                    : networkScan.websiteResult
+                    ? networkScan.websiteResult.domain
+                    : 'Not Scanned Yet'}
                 </h4>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {networkScan.ipResult
                     ? networkScan.ipResult.explanation
-                    : "IP is an active Tor exit node in Germany with an 89/100 abuse history score."}
+                    : networkScan.websiteResult
+                    ? networkScan.websiteResult.explanation
+                    : 'Module not executed during this session. Test an IP, link, or website.'}
                 </p>
               </div>
               <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                High-confidence malicious proxy
+                {networkScan.ipResult
+                  ? `IP Abuse Score: ${networkScan.ipResult.abuseScore}/100`
+                  : networkScan.websiteResult
+                  ? `Port Risk: ${networkScan.websiteResult.riskScore}/100`
+                  : 'No network checks'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* Section 2: How It Happened */}
+        {/* Section 2: Consolidated Network Findings */}
+        <div className="space-y-4">
+          <div className="border-b border-slate-800 pb-2 flex items-center justify-between">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">2</span>
+              <span>Network Findings & Hostile Signatures</span>
+            </h3>
+            <span className="text-xs text-cyan-400 font-mono">
+              {displayNetworkFindings.length} Network Issue(s) Identified
+            </span>
+          </div>
+
+          {displayNetworkFindings.length === 0 ? (
+            <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 text-xs text-slate-300 flex items-center gap-2">
+              <CheckCircle size={16} className="text-emerald-400 shrink-0" />
+              <span>No hostile IP addresses, Tor routing nodes, or unencrypted network endpoints detected.</span>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {displayNetworkFindings.map((nf) => (
+                <div
+                  key={nf.id}
+                  className={`p-4 rounded-xl bg-[#111A2E] border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                    nf.severity === 'critical'
+                      ? 'border-red-500/40 bg-red-950/10'
+                      : nf.severity === 'high'
+                      ? 'border-orange-500/40 bg-orange-950/10'
+                      : 'border-slate-800'
+                  }`}
+                >
+                  <div className="space-y-1 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        {nf.source}
+                      </span>
+                      {nf.target && (
+                        <span className="text-xs font-mono text-cyan-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          {nf.target}
+                        </span>
+                      )}
+                      <h4 className="text-sm font-bold text-white">{nf.title}</h4>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">{nf.detail}</p>
+                  </div>
+                  <RiskBadge level={nf.severity} size="sm" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Section 3: How It Likely Happened */}
         <div className="space-y-4">
           <div className="border-b border-slate-800 pb-2">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">2</span>
-              <span>How It Likely Happened (Plain English)</span>
+              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">3</span>
+              <span>How It Likely Happened (Plain English Story)</span>
             </h3>
           </div>
 
           <div className="p-5 rounded-2xl bg-[#111A2E] border border-slate-800 space-y-3">
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Based on the digital fingerprints collected, here is the reconstructed timeline of how an intruder breached your security perimeter:
+              Based on the digital fingerprints collected, here is the reconstructed timeline of how an intruder breached your perimeter or could exploit your accounts:
             </p>
 
             <div className="space-y-2.5 pt-1">
-              <div className="flex items-start gap-3 p-3 rounded-xl bg-[#0B1220] border border-slate-800">
-                <span className="w-5 h-5 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                  <strong>Accidental Secret Publication:</strong> A live configuration file containing private credentials was committed to a public GitHub repository.
-                </p>
-              </div>
-
-              <div className="flex items-start gap-3 p-3 rounded-xl bg-[#0B1220] border border-slate-800">
-                <span className="w-5 h-5 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
-                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                  <strong>Automated Scraping:</strong> Malicious scanner bots detected the exposed credentials within minutes of push.
-                </p>
-              </div>
-
-              <div className="flex items-start gap-3 p-3 rounded-xl bg-[#0B1220] border border-slate-800">
-                <span className="w-5 h-5 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</span>
-                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                  <strong>Unauthorized Access:</strong> An intruder operating from Frankfurt, Germany logged in through Telegram. Because Two-Step Verification was missing, no secondary password was required.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Section 3: Risk Level Breakdown */}
-        <div className="space-y-4">
-          <div className="border-b border-slate-800 pb-2">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">3</span>
-              <span>Risk Level & Flaw Distribution</span>
-            </h3>
-          </div>
-
-          <div className="p-5 rounded-2xl bg-[#111A2E] border border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-            <div className="h-48 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={65}
-                    dataKey="value"
-                    paddingAngle={3}
-                  >
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#0E1629',
-                      borderColor: '#1E293B',
-                      borderRadius: '8px',
-                      color: '#fff',
-                      fontSize: '12px',
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="space-y-2.5">
-              {chartData.map((d) => (
-                <div key={d.name} className="flex items-center justify-between text-xs p-2 rounded-lg bg-[#0B1220] border border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
-                    <span className="text-slate-300 font-medium">{d.name}</span>
-                  </div>
-                  <span className="font-bold text-white font-mono">{d.value} Findings</span>
+              {displayHowItHappened.map((stepText, idx) => (
+                <div key={idx} className="flex items-start gap-3 p-3.5 rounded-xl bg-[#0B1220] border border-slate-800">
+                  <span className="w-6 h-6 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 border border-cyan-500/20">
+                    {idx + 1}
+                  </span>
+                  <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">{stepText}</p>
                 </div>
               ))}
             </div>
@@ -450,15 +588,18 @@ export const Report: React.FC = () => {
 
         {/* Section 4: What You Should Do Now (Checklist) */}
         <div className="space-y-4">
-          <div className="border-b border-slate-800 pb-2">
+          <div className="border-b border-slate-800 pb-2 flex items-center justify-between">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">4</span>
-              <span>What You Should Do Now (Numbered Recovery Plan)</span>
+              <span>What You Should Do Now (Prioritized Recovery Plan)</span>
             </h3>
+            <span className="text-xs font-mono text-cyan-400">
+              {Object.values(completedSteps).filter(Boolean).length}/{displayActions.length} Completed
+            </span>
           </div>
 
           <div className="space-y-3">
-            {defaultActions.map((act) => {
+            {displayActions.map((act) => {
               const isDone = !!completedSteps[act.id];
               return (
                 <div
@@ -477,13 +618,14 @@ export const Report: React.FC = () => {
                   >
                     {isDone ? <CheckCircle size={15} /> : act.id}
                   </div>
-                  <div>
-                    <h5 className={`text-sm font-bold text-white ${isDone ? 'line-through text-slate-400' : ''}`}>
-                      {act.title}
-                    </h5>
-                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                      {act.detail}
-                    </p>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <h5 className={`text-sm font-bold text-white ${isDone ? 'line-through text-slate-400' : ''}`}>
+                        {act.title}
+                      </h5>
+                      {act.priority && <RiskBadge level={act.priority} size="sm" />}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">{act.detail}</p>
                   </div>
                 </div>
               );
@@ -491,76 +633,53 @@ export const Report: React.FC = () => {
           </div>
         </div>
 
-        {/* Section 5: Connected Accounts & Scanned History */}
+        {/* Section 5: Limitations & Transparency Disclosures */}
         <div className="space-y-4">
           <div className="border-b border-slate-800 pb-2">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">5</span>
-              <span>Audited Accounts & Investigation Assets</span>
+              <span>Investigation Limitations & Disclosures</span>
             </h3>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#111A2E]">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="bg-[#0B1220] uppercase text-[10px] tracking-wider text-slate-400 border-b border-slate-800">
-                <tr>
-                  <th className="px-4 py-3">Asset Name</th>
-                  <th className="px-4 py-3">Platform</th>
-                  <th className="px-4 py-3">Investigation Time</th>
-                  <th className="px-4 py-3 text-right">Audit Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                <tr>
-                  <td className="px-4 py-3 font-semibold text-white">
-                    {telegramScan ? telegramScan.phone : '+1 (555) 019-2834'}
-                  </td>
-                  <td className="px-4 py-3">Telegram Messenger</td>
-                  <td className="px-4 py-3 text-slate-400">Today at 10:14 PM</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">
-                      Compromised
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-3 font-semibold text-white">
-                    {repoScan ? repoScan.repoName : 'my-project/api-backend'}
-                  </td>
-                  <td className="px-4 py-3">GitHub Public Repository</td>
-                  <td className="px-4 py-3 text-slate-400">Today at 09:30 PM</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-orange-500/15 text-orange-400 border border-orange-500/30">
-                      Secret Leak
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-3 font-semibold text-white">
-                    {networkScan.ipResult ? networkScan.ipResult.ip : '185.220.101.5'}
-                  </td>
-                  <td className="px-4 py-3">IP Threat Intelligence</td>
-                  <td className="px-4 py-3 text-slate-400">Today at 09:45 PM</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-red-500/15 text-red-400 border border-red-500/30">
-                      Hostile Tor Node
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 space-y-2 text-xs text-slate-300">
+            <div className="flex items-center gap-2 text-slate-400 font-semibold mb-2">
+              <Info size={15} className="text-cyan-400" />
+              <span>Coverage & Heuristic Disclosures:</span>
+            </div>
+            <ul className="list-disc list-inside space-y-1.5 text-slate-300 leading-relaxed">
+              {displayLimitations.map((limitText, idx) => (
+                <li key={idx} className={limitText.includes('DEMO DATA') ? 'text-amber-300 font-medium' : ''}>
+                  {limitText}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 
-        {/* Security Watermark & Privacy Verification */}
+        {/* Section 6: Methodology */}
+        <div className="space-y-4">
+          <div className="border-b border-slate-800 pb-2">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">6</span>
+              <span>Scoring Methodology</span>
+            </h3>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 text-xs text-slate-300 leading-relaxed">
+            <p>{displayMethodology}</p>
+          </div>
+        </div>
+
+        {/* Running Official Disclaimer Footer (Mandatory Requirement) */}
         <div className="pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left text-xs text-slate-400">
           <div className="flex items-center gap-2">
-            <ShieldCheck size={16} className="text-emerald-400" />
-            <span>Zero Data Stored • Verified In-Memory Security Audit</span>
+            <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
+            <span>Zero Data Stored • Verified Stateless Risk Engine</span>
           </div>
-          <span className="font-mono text-[11px] text-slate-400">
-            Account Breach Investigation • Tagline: Find out if you were hacked, and how.
-          </span>
+          <p className="text-[11px] text-slate-400 max-w-xl text-center sm:text-right">
+            This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach.
+          </p>
         </div>
       </div>
     </div>

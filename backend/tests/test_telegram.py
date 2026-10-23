@@ -436,6 +436,166 @@ async def test_analyze_no_2fa_detected():
         assert "Two-Step Verification Password Is Off" in no_2fa_finding["title"]
 
 
+@pytest.mark.asyncio
+async def test_analyze_dormant_session_detected():
+    mock_client = AsyncMock()
+    mock_client.log_out = AsyncMock()
+    mock_client.disconnect = AsyncMock()
+    mock_client.get_me = AsyncMock(return_value=MagicMock(first_name="DormantUser", last_name="", username=""))
+
+    t_old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=45)
+    sess_old = MagicMock()
+    sess_old.current = False
+    sess_old.device_model = "Old iPad Air"
+    sess_old.app_name = "Telegram iOS"
+    sess_old.app_version = "8.0"
+    sess_old.ip = "10.0.0.1"
+    sess_old.country = "United States"
+    sess_old.date_active = t_old
+    sess_old.official_app = True
+    sess_old.hash = 999
+
+    auth_res = MagicMock()
+    auth_res.authorizations = [sess_old]
+
+    async def mock_call(req):
+        if "GetAuthorizationsRequest" in type(req).__name__:
+            return auth_res
+        if "GetPasswordRequest" in type(req).__name__:
+            pwd = MagicMock()
+            pwd.has_password = True
+            pwd.has_recovery = True
+            return pwd
+        return MagicMock()
+
+    mock_client.side_effect = mock_call
+
+    async def mock_iter(*args, **kwargs):
+        if False:
+            yield None
+
+    mock_client.iter_messages = mock_iter
+
+    flow_id = "flow-dormant"
+    flow = TelegramFlow(flow_id, "+14155552671", mock_client, "fake_hash")
+    flow.status = "verified"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/analyze", json={"flowId": flow_id})
+        assert resp.status_code == 200
+        data = resp.json()
+        findings = data["findings"]
+        dormant = next((f for f in findings if "Dormant" in f["title"]), None)
+        assert dormant is not None
+        assert dormant["risk"] == "medium"
+        assert "log out old devices" in dormant["explanation"].lower()
+        assert any("log out old devices" in act.lower() for act in data["actionChecklist"])
+
+
+@pytest.mark.asyncio
+async def test_analyze_service_chat_suspicious_url():
+    mock_client = AsyncMock()
+    mock_client.log_out = AsyncMock()
+    mock_client.disconnect = AsyncMock()
+    mock_client.get_me = AsyncMock(return_value=MagicMock(first_name="LinkUser", last_name="", username=""))
+
+    auth_res = MagicMock()
+    auth_res.authorizations = []
+
+    async def mock_call(req):
+        if "GetAuthorizationsRequest" in type(req).__name__:
+            return auth_res
+        if "GetPasswordRequest" in type(req).__name__:
+            pwd = MagicMock()
+            pwd.has_password = True
+            pwd.has_recovery = True
+            return pwd
+        return MagicMock()
+
+    mock_client.side_effect = mock_call
+
+    # Mock message from user 777000 containing a suspicious link
+    mock_msg = MagicMock()
+    mock_msg.text = "New login from unknown browser. If this was not you, confirm at https://phishing-telegram-login.com"
+
+    async def mock_iter(*args, **kwargs):
+        yield mock_msg
+
+    mock_client.iter_messages = mock_iter
+
+    # Mock inspect_link returning Suspicious
+    mock_link_resp = MagicMock()
+    mock_link_resp.verdict = "Suspicious"
+    mock_link_resp.risk_level = "high"
+    mock_link_resp.domain = "phishing-telegram-login.com"
+    mock_link_resp.explanation = "Domain registered 2 days ago with invalid SSL."
+
+    flow_id = "flow-link"
+    flow = TelegramFlow(flow_id, "+14155552671", mock_client, "fake_hash")
+    flow.status = "verified"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ), patch("modules.telegram_module.inspect_link", AsyncMock(return_value=mock_link_resp)):
+        resp = client.post("/api/telegram/analyze", json={"flowId": flow_id})
+        assert resp.status_code == 200
+        data = resp.json()
+        findings = data["findings"]
+        link_finding = next((f for f in findings if f["type"] == "suspicious_link"), None)
+        assert link_finding is not None
+        assert link_finding["risk"] == "high"
+        assert "phishing-telegram-login.com" in link_finding["title"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_2fa_missing_recovery_email():
+    mock_client = AsyncMock()
+    mock_client.log_out = AsyncMock()
+    mock_client.disconnect = AsyncMock()
+    mock_client.get_me = AsyncMock(return_value=MagicMock(first_name="NoRec", last_name="", username=""))
+
+    auth_res = MagicMock()
+    auth_res.authorizations = []
+
+    async def mock_call(req):
+        if "GetAuthorizationsRequest" in type(req).__name__:
+            return auth_res
+        if "GetPasswordRequest" in type(req).__name__:
+            pwd = MagicMock()
+            pwd.has_password = True
+            pwd.has_recovery = False  # Missing recovery email
+            return pwd
+        return MagicMock()
+
+    mock_client.side_effect = mock_call
+
+    async def mock_iter(*args, **kwargs):
+        if False:
+            yield None
+
+    mock_client.iter_messages = mock_iter
+
+    flow_id = "flow-norecovery"
+    flow = TelegramFlow(flow_id, "+14155552671", mock_client, "fake_hash")
+    flow.status = "verified"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/analyze", json={"flowId": flow_id})
+        assert resp.status_code == 200
+        data = resp.json()
+        findings = data["findings"]
+        rec_finding = next((f for f in findings if "Missing Recovery Email" in f["title"]), None)
+        assert rec_finding is not None
+        assert rec_finding["risk"] == "medium"
+
+
 # ---------------------------------------------------------------------------
 # 6. Flow TTL Cleanup & Cancel Endpoint Tests
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ import {
   IpCheckResult,
   LinkCheckResult,
   WebsiteCheckResult,
+  NetworkScanResult,
   FullReport,
 } from './types';
 
@@ -457,16 +458,37 @@ export async function checkWebsite(domain: string): Promise<WebsiteCheckResult> 
   return await handleResponse<WebsiteCheckResult>(res, 'Failed to inspect website');
 }
 
-/**
- * Compiles a comprehensive full investigation report across all scanned channels.
- * TODO: real backend (GET /api/v1/report)
- */
-export async function getReport(): Promise<FullReport> {
-  await wait(1200);
+export interface GenerateReportPayload {
+  telegram?: TelegramScanResult | null;
+  repo?: RepoScanResult | null;
+  network?: NetworkScanResult | null;
+  demoModules?: string[];
+}
 
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/report`);
-  // return await res.json();
+/**
+ * Fallback synthesizer if backend is unreachable.
+ */
+function getFallbackReport(payload: GenerateReportPayload): FullReport {
+  const tg = payload.telegram;
+  const rp = payload.repo;
+  const net = payload.network;
+  const demoMods = payload.demoModules || [];
+
+  const scores: number[] = [];
+  if (tg) scores.push(tg.riskScore);
+  if (rp) scores.push(rp.riskScore);
+  if (net?.ipResult) scores.push(net.ipResult.abuseScore);
+  else if (net?.websiteResult) scores.push(net.websiteResult.riskScore);
+
+  let overallScore = 0;
+  if (scores.length > 0) {
+    const highest = Math.max(...scores);
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    overallScore = Math.round(0.5 * highest + 0.5 * avg);
+  }
+
+  const overallRisk =
+    overallScore >= 75 ? 'critical' : overallScore >= 50 ? 'high' : overallScore >= 25 ? 'medium' : 'low';
 
   return {
     id: `REP-${Math.floor(100000 + Math.random() * 900000)}`,
@@ -475,47 +497,86 @@ export async function getReport(): Promise<FullReport> {
       month: 'long',
       day: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
     }),
-    overallScore: 78,
-    overallRisk: 'critical',
-    summary: 'High likelihood of account unauthorized access: an unknown device in Germany accessed Telegram, and a public code repository leaked credentials.',
+    overallScore,
+    overallRisk,
+    summary:
+      overallScore > 50
+        ? 'High likelihood of account unauthorized access: anomalous logins or leaked code credentials were detected.'
+        : 'Your digital assets look safe with no severe active compromise signals detected.',
     howItHappened: [
-      "Step 1: Your GitHub repository accidentally published an API credential in settings.py.",
-      "Step 2: Automated internet bots found this credential within minutes of publication.",
-      "Step 3: An intruder in Frankfurt, Germany logged into your Telegram session using an intercepted verification code.",
-      "Step 4: Because Two-Step Verification was not turned on, the intruder accessed your account without needing an extra password."
+      'Step 1: Monitored sessions, repositories, and network perimeter records were synthesized.',
+      'Step 2: Threat heuristics evaluated IP geolocations, API key patterns, and port accessibility.',
     ],
     actionPlan: [
       {
         id: 1,
-        title: "Kick out unknown Telegram devices",
-        detail: "Open Telegram > Settings > Devices > Tap 'Terminate all other sessions' to kick out the intruder in Germany.",
-        completed: false,
+        title: 'Review Telegram Active Sessions',
+        detail: "Open Telegram Settings > Devices > Tap 'Terminate all other sessions' if unfamiliar devices are present.",
       },
       {
         id: 2,
-        title: "Turn on Telegram Two-Step Password",
-        detail: "Go to Settings > Privacy and Security > Two-Step Verification. Set a strong password so SMS alone cannot access your account.",
-        completed: false,
+        title: 'Enable Two-Step Verification',
+        detail: 'Configure a secondary cloud password under Telegram Settings > Privacy and Security.',
       },
-      {
-        id: 3,
-        title: "Revoke the leaked Stripe secret key",
-        detail: "Log in to your Stripe dashboard, roll the leaked key immediately, and check recent charges for fraudulent activity.",
-        completed: false,
-      },
-      {
-        id: 4,
-        title: "Close exposed port 22 on your web server",
-        detail: "Adjust your cloud firewall (AWS/DigitalOcean/Hetzner) to block public access to port 22 except from your personal IP address.",
-        completed: false,
-      }
     ],
     connectedAccounts: [
-      { name: "Telegram Messenger", service: "Telegram", connectedAt: "Today at 10:14 PM", status: "Active (Critical Risk)" },
-      { name: "my-project/api-backend", service: "GitHub", connectedAt: "Today at 09:30 PM", status: "Scanned (High Risk)" },
-      { name: "185.220.101.5", service: "Network IP", connectedAt: "Today at 09:45 PM", status: "Tor Exit Node (Dangerous)" }
-    ]
+      ...(tg ? [{ name: `Telegram (${tg.phone})`, service: 'Telegram MTProto', connectedAt: 'Recent', status: `${tg.riskLevel.toUpperCase()}` }] : []),
+      ...(rp ? [{ name: rp.repoName, service: 'GitHub Repo', connectedAt: 'Recent', status: `${rp.riskLevel.toUpperCase()}` }] : []),
+    ],
+    limitations: [
+      'Generated locally via fallback synthesis.',
+      ...(demoMods.length > 0 ? [`Demo mode active for: ${demoMods.join(', ')}`] : []),
+    ],
+    methodology: 'Computed as 50% highest individual module score plus 50% average across all scanned modules.',
+    demoModules: demoMods,
   };
+}
+
+/**
+ * Compiles a comprehensive full investigation report across all scanned channels.
+ * Calls real backend: POST /api/report/generate
+ */
+export async function getReport(payload?: GenerateReportPayload): Promise<FullReport> {
+  const requestBody = payload || {};
+
+  try {
+    const res = await fetch(`${API_BASE}/api/report/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        telegram: requestBody.telegram || null,
+        repo: requestBody.repo || null,
+        network: requestBody.network || null,
+        demoModules: requestBody.demoModules || [],
+      }),
+    });
+
+    if (res.status === 413) {
+      throw new Error('Report data exceeded the 1 MB size limit.');
+    }
+    if (res.status === 429) {
+      throw new Error('Too many report requests. Please wait a minute.');
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || 'Failed to generate investigation report on backend.');
+    }
+
+    const data: FullReport = await res.json();
+    return data;
+  } catch (err: any) {
+    if (
+      err.message &&
+      (err.message.includes('1 MB') ||
+        err.message.includes('Too many') ||
+        err.message.includes('backend.'))
+    ) {
+      throw err;
+    }
+    // Safe fallback so report never hangs if offline
+    return getFallbackReport(requestBody);
+  }
 }

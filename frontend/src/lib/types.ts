@@ -161,6 +161,33 @@ export interface RecentScan {
   status: 'Completed' | 'Alert' | 'Secure';
 }
 
+export interface ModuleScore {
+  module: string;
+  name: string;
+  scanned: boolean;
+  score?: number | null;
+  riskLevel?: RiskLevel | null;
+  isDemo?: boolean;
+  details?: string;
+}
+
+export interface NetworkFindingItem {
+  id: string;
+  source: string;
+  title: string;
+  detail: string;
+  severity: RiskLevel;
+  target?: string;
+}
+
+export interface ActionPlanItem {
+  id: number;
+  title: string;
+  detail: string;
+  priority?: RiskLevel;
+  completed?: boolean;
+}
+
 export interface FullReport {
   id: string;
   generatedAt: string;
@@ -171,17 +198,19 @@ export interface FullReport {
   repo?: RepoScanResult;
   network?: NetworkScanResult;
   howItHappened: string[];
-  actionPlan: {
-    id: number;
-    title: string;
-    detail: string;
-    completed?: boolean;
-  }[];
+  actionPlan: ActionPlanItem[];
+  whatToDoNow?: ActionPlanItem[];
+  modules?: ModuleScore[];
+  networkFindings?: NetworkFindingItem[];
+  limitations?: string[];
+  methodology?: string;
+  demoModules?: string[];
   connectedAccounts: {
     name: string;
     service: string;
     connectedAt: string;
     status: string;
+    isDemo?: boolean;
   }[];
 }
 

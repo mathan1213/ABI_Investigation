@@ -1,95 +1,266 @@
-# Account Breach Investigation
+# Account Breach Investigation (ABI)
 
 > **Tagline:** *"Find out if you were hacked, and how."*
 
-A cybersecurity monorepo web application designed specifically for everyday, non-technical users. It analyzes connected accounts, detects unauthorized foreign logins, flags leaked passwords and API keys in source code, checks suspicious links and hostile IP addresses, and explains everything in clear plain English with actionable recovery steps.
+An agentic, multi-vector cybersecurity investigation web platform engineered specifically for everyday, non-technical users. It provides plain-English forensics into connected online accounts, detects unauthorized foreign logins, flags leaked credentials in public repositories, uncovers malicious network infrastructure, and synthesizes an executive recovery action plan.
 
 ---
 
-## 🏗 Repository Structure (Monorepo)
+## 📸 Platform Overview & Visual Previews
 
-This repository is structured as a clean monorepo separating client and server concerns:
+| View | Purpose |
+| :--- | :--- |
+| **Active Dashboard** | High-level threat gauge, per-module risk cards, interactive donut and bar breakdowns, and recent scan logs. |
+| **Telegram Forensics** | Zero-storage MTProto session audit checking for foreign sessions, impossible travel, 2FA gaps, and service alerts. |
+| **Repository Forensics**| Public GitHub scanning detecting hardcoded API secrets, vulnerable dependencies, and insecure network endpoints. |
+| **Network & Web Check** | IP geolocation & Tor/VPN detection, redirect hop analysis, SSL validation, port audits, and security headers. |
+| **Incident Dossier**   | Multi-vector risk report with plain-English attack reconstruction, prioritized recovery checklist, and PDF export. |
+
+---
+
+## 🏛 System Architecture
+
+The monorepo separates the Vite + React client from the FastAPI forensics backend. All modules feed into a centralized risk engine that outputs standardized incident dossiers.
+
+```mermaid
+flowchart TD
+    subgraph Client["Frontend Client (React 19 + TypeScript + Vite)"]
+        UI["Modern Dark Navy UI\n(Tailwind CSS + Lucide)"]
+        CTX["ScanContext State Management\n(0.5*max + 0.5*avg Scoring)"]
+        PDF["Client-Side PDF Generator\n(jsPDF + html2canvas)"]
+        UI <--> CTX
+        CTX --> PDF
+    end
+
+    subgraph API["FastAPI Forensic Backend (Python 3.11+)"]
+        ROUTER["REST API Routers\n(CORS + IP Rate Limiting + 1MB Cap)"]
+        
+        subgraph Modules["Investigation Engines"]
+            TG["Telegram Module\n(Telethon MTProto + In-Memory Sessions)"]
+            REPO["GitHub Repo Module\n(AST + Bandit Heuristics + Deep Secrets)"]
+            NET["Network Intelligence Module\n(DNS + SSL + Ports + Tor/VPN)"]
+        end
+        
+        RISK["Stateless Risk Engine\n(Formula: 0.5*Max + 0.5*Avg)"]
+        
+        ROUTER --> TG
+        ROUTER --> REPO
+        ROUTER --> NET
+        
+        TG -.->|Session IP Audit| NET
+        TG -.->|Service URL Audit| NET
+        
+        TG --> RISK
+        REPO --> RISK
+        NET --> RISK
+    end
+
+    subgraph ExtServices["External Threat Intelligence & APIs"]
+        TELEGRAM_NET["Telegram MTProto Servers\n(my.telegram.org)"]
+        GITHUB_API["GitHub API & Git Hosts\n(Public Repositories)"]
+        ABUSE_IP["AbuseIPDB API\n(IP Threat Reputation)"]
+        VT_API["VirusTotal API\n(Domain & Link Reputation)"]
+        TOR_BULK["Tor Project Directory\n(Exit Node Lists)"]
+    end
+
+    CTX <==>|JSON HTTP REST API| ROUTER
+    TG <--> TELEGRAM_NET
+    REPO <--> GITHUB_API
+    NET <--> ABUSE_IP
+    NET <--> VT_API
+    NET <--> TOR_BULK
+```
+
+---
+
+## 📂 Repository Structure
 
 ```text
 ABI_Investigation/
-├── frontend/             # Complete Vite + React + TypeScript web application
+├── frontend/                     # Modern React + TypeScript SPA
 │   ├── src/
-│   │   ├── components/   # Reusable UI widgets (RiskBadge, RiskGauge, Stepper, etc.)
-│   │   ├── context/      # Null-safe scan state management (ScanContext.tsx)
-│   │   ├── lib/          # Typed schemas and API layer with FastAPI-ready mock hooks
-│   │   ├── pages/        # Dashboard, LinkTelegram, RepoCheck, NetworkCheck, Report, 404
-│   │   ├── App.tsx       # Route definitions
-│   │   └── main.tsx      # Application entry point
-│   ├── public/           # Static icons and assets
-│   ├── package.json      # Dependencies (Tailwind, Lucide, Recharts, jsPDF, html2canvas)
-│   └── vite.config.ts    # Vite bundler configuration
-├── backend/              # Python FastAPI backend service
-│   ├── .gitkeep          # Workspace placeholder
-│   └── .gitignore        # Backend-specific ignore rules (.env, .venv, pycache)
-├── .gitignore            # Root repository ignore rules
-└── README.md             # Project documentation and quickstart guide
+│   │   ├── components/           # UI widgets (RiskGauge, StatCard, SessionTable, Stepper)
+│   │   ├── context/              # Centralized scan state (ScanContext.tsx)
+│   │   ├── lib/                  # API client (api.ts) & TypeScript interfaces (types.ts)
+│   │   ├── pages/                # Dashboard, LinkTelegram, RepoCheck, NetworkCheck, Report
+│   │   ├── App.tsx               # Route definitions
+│   │   └── main.tsx              # React mounting root
+│   ├── package.json              # Client dependencies
+│   └── vite.config.ts            # Vite configuration
+├── backend/                      # Python FastAPI Forensics Backend
+│   ├── config.py                 # Pydantic BaseSettings & rate limits
+│   ├── main.py                   # FastAPI application & router assembly
+│   ├── models.py                 # Pydantic v2 schemas
+│   ├── modules/
+│   │   ├── network_module.py     # DNS, WHOIS, SSL, port probing, Tor/VPN heuristics
+│   │   ├── repo_module.py        # Git cloning, secret entropy, AST scanning
+│   │   ├── telegram_module.py    # Telethon MTProto read-only forensic auditor
+│   │   └── risk_engine.py        # Composite scoring & attack narrative reconstruction
+│   ├── routers/
+│   │   ├── network.py            # /api/network/ip, /link, /website
+│   │   ├── repo.py               # /api/repo/scan
+│   │   ├── telegram.py           # /api/telegram/send-code, /verify, /analyze, /cancel
+│   │   └── report.py             # /api/report/generate
+│   ├── tests/                    # Comprehensive unit tests (68 tests passing)
+│   │   ├── test_network.py
+│   │   ├── test_repo.py
+│   │   ├── test_telegram.py
+│   │   └── test_report.py
+│   ├── requirements.txt          # Python dependencies
+│   └── .env.example              # Environment variables template
+├── docs/
+│   └── VIVA_NOTES.md             # Project viva guide, networking concepts, & 15 Q&As
+├── .gitignore                    # Root repository ignore rules
+└── README.md                     # Project documentation
 ```
-
-### 1. `frontend/`
-Contains the complete, production-ready user interface built with:
-- **Vite + React 19 + TypeScript**
-- **Tailwind CSS** with dark navy theme (`#0B1220` background, `#111A2E` cards, `#22D3EE` cyan accent)
-- **React Router** for seamless multi-page navigation
-- **Recharts** for visual risk and trend analytics
-- **jsPDF + html2canvas** for generating downloadable PDF investigation reports
-- **Lucide Icons** for cybersecurity status indicators
-
-### 2. `backend/`
-Designated home for the Python FastAPI server. It exposes REST API endpoints for session auditing, IP threat intelligence, and GitHub repository analysis. All mock functions in `frontend/src/lib/api.ts` are pre-wired with route comments to connect to `http://localhost:8000`.
 
 ---
 
-## 🚀 Running the Frontend
+## ⚡ Quickstart Guide
 
-To start the frontend application locally:
+### 1. Prerequisites
+- **Node.js**: v18+ and `npm`
+- **Python**: 3.11+ and `pip`
+- **Git**: Installed and on system PATH
+
+---
+
+### 2. Backend Setup (`backend/`)
 
 ```bash
-# 1. Navigate to the frontend directory
+# 1. Navigate to backend directory
+cd backend
+
+# 2. Create and activate a Python virtual environment
+python -m venv .venv
+
+# On Windows (PowerShell):
+.\.venv\Scripts\Activate.ps1
+# On Linux/macOS:
+source .venv/bin/activate
+
+# 3. Install dependencies
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# 4. Create your local .env configuration (optional, see API keys below)
+copy .env.example .env     # On Windows
+cp .env.example .env       # On Linux/macOS
+
+# 5. Start the FastAPI development server with auto-reload
+python -m uvicorn main:app --port 8000 --reload
+```
+
+The backend API will be available at:
+- API Base: `http://localhost:8000`
+- Interactive Swagger UI: `http://localhost:8000/docs`
+- ReDoc Documentation: `http://localhost:8000/redoc`
+
+---
+
+### 3. Frontend Setup (`frontend/`)
+
+Open a second terminal window:
+
+```bash
+# 1. Navigate to frontend directory
 cd frontend
 
-# 2. Install all required dependencies
+# 2. Install dependencies
 npm install
 
-# 3. Start the development server
-npm run dev
+# 3. Start Vite development server
+npm run dev -- --port 5173
 ```
 
-Open your browser at `http://localhost:5173/`.
-
-### Building for Production
-```bash
-cd frontend
-npm run build
-npm run preview
-```
+Open your browser at `http://localhost:5173`.
 
 ---
 
-## 🔌 Connecting Frontend to Backend
+## 🔑 How to Obtain External API Keys
 
-All mock data and async functions are centralized in:
-`frontend/src/lib/api.ts`
+The application works completely out of the box in **Demo / Heuristic Mode** even if no external keys are configured. For live threat intelligence and live MTProto logins, configure the following in `backend/.env`:
 
-### Backend URL
-`const API_BASE = "http://localhost:8000";`
-
-| Frontend Function | Method | FastAPI Route | Purpose |
+| Key Name | Provider | Free Tier URL | What It Enables |
 | :--- | :--- | :--- | :--- |
-| `analyzeTelegram(phone, otp)` | `POST` | `/api/v1/telegram/analyze` | Read-only check for foreign sessions & 2FA |
-| `scanRepo(repoUrl)` | `POST` | `/api/v1/repo/scan` | Scans public GitHub repositories for leaked keys |
-| `checkIp(ip)` | `GET` | `/api/v1/network/ip?ip={ip}` | Resolves IP abuse scores and Tor/VPN status |
-| `checkLink(url)` | `GET` | `/api/v1/network/link?url={url}` | Audits redirect chains and domain age |
-| `checkWebsite(domain)` | `GET` | `/api/v1/network/website?domain={domain}` | Checks open ports (80, 443, 22, 21) & SSL expiry |
-| `getReport()` | `GET` | `/api/v1/report` | Returns synthesized security dossier |
+| `TELEGRAM_API_ID` & `TELEGRAM_API_HASH` | Telegram | [my.telegram.org](https://my.telegram.org) | Enables real MTProto authentication and active session queries |
+| `ABUSEIPDB_KEY` | AbuseIPDB | [abuseipdb.com/register](https://www.abuseipdb.com/register) | Enables live crowd-sourced IP abuse scores (otherwise heuristic proxy scoring) |
+| `VIRUSTOTAL_KEY` | VirusTotal | [virustotal.com/gui/join-us](https://www.virustotal.com/gui/join-us) | Enables URL domain reputation checks |
+| `GITHUB_TOKEN` | GitHub | [github.com/settings/tokens](https://github.com/settings/tokens) | Increases GitHub API rate limits from 60 to 5,000 reqs/hr |
 
 ---
 
-## 🔒 Privacy & Safety Guarantee
+## 🛡 Security & Privacy Architecture
 
-- **Zero-Storage:** No credentials, phone numbers, or private code are permanently stored.
-- **Client-Side PDF:** Reports are rendered locally in your browser using `html2canvas` and `jsPDF`.
+The platform was built with defensive cybersecurity principles:
+
+1. **Strict Zero-Storage Policy**:
+   - The backend is **completely stateless**.
+   - No phone numbers, passwords, OTPs, session strings, source code files, or user chats are ever written to disk or database.
+   - Authentication clients utilize Telethon `StringSession` kept strictly in volatile RAM.
+   - Upon completion of `/api/telegram/analyze` (inside a mandatory `finally` block), `await client.log_out()` is executed, the socket is disconnected, and the in-memory flow is deleted.
+
+2. **Server-Side Request Forgery (SSRF) Protection**:
+   - All network and link inspections validate IP addresses against reserved and dangerous ranges.
+   - Blocks: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, loopback IPv6 (`::1`), multicast, and carrier-grade NAT (`100.64.0.0/10`).
+   - Redirect chains are re-evaluated on **every single hop** (up to 8 hops) to prevent redirect-based SSRF.
+
+3. **Safe Static Code Analysis**:
+   - The repository checker clones only public repositories up to depth 1 (`--depth 1 --single-branch`).
+   - It **never executes** scanned code, builds, or scripts.
+   - Cloned files are cleaned up in an asynchronous `finally` block using temporary directories.
+   - Payload caps: maximum repository size of 100 MB, maximum 3,000 files, individual file limit of 1 MB.
+
+4. **Telegram Privacy Sandbox**:
+   - Only reads active authorizations (`GetAuthorizationsRequest`), 2FA status (`GetPasswordRequest`), and notifications from user ID `777000` (Telegram Service Notifications).
+   - **Never reads private messages, group chats, contacts, or media.**
+
+5. **Rate Limiting & Payload Caps**:
+   - `/api/telegram/send-code`: 3 requests per 10 minutes per client IP.
+   - General endpoints: 10 to 20 requests per minute per client IP.
+   - `/api/report/generate`: Strict 1 MB request body limit (returns `413 Payload Too Large`).
+
+---
+
+## 📊 Composite Risk Scoring Methodology
+
+The overall risk score is calculated via a weighted composite formula designed to prevent dangerous alerts from being diluted:
+
+$$\text{Overall Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5 \times \text{mean}(\text{Scores})\Big)$$
+
+### Risk Level Thresholds:
+- **Low Risk**: `0 - 24%`
+- **Medium Risk**: `25 - 49%`
+- **High Risk**: `50 - 74%`
+- **Critical Risk**: `75 - 100%`
+
+> [!IMPORTANT]
+> **Critical Override Rule:** If any individual finding across any scanned module is classified as **Critical** (e.g. an active Tor session, physically impossible travel, or exposed AWS keys), the overall threat level is automatically elevated to at least **High**, regardless of how many safe checks were performed.
+
+---
+
+## 🧪 Testing & Verification
+
+The backend includes a comprehensive pytest suite with 100% mocked external calls (zero live MTProto traffic or network calls during test runs):
+
+```bash
+cd backend
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Test coverage:
+- **`tests/test_network.py`**: 25 tests (SSRF blocking, IP geolocations, SSL parsing, DNS apex domain extraction, redirect hops, website ports).
+- **`tests/test_repo.py`**: 15 tests (URL validation, credential regexes, dependency checks, bandit heuristics, timeout handling).
+- **`tests/test_telegram.py`**: 18 tests (E.164 phone formats, unconfigured 503 fallback, 2FA password prompt, FloodWait 429, dormant session detection, impossible travel, logout in finally).
+- **`tests/test_report.py`**: 10 tests (missing modules, score formula, critical override, de-duplication, demo flags, 1 MB payload cap, rate limiting).
+
+**Total: 68 / 68 Tests Passing (100%)**
+
+---
+
+## ⚖️ Legal & Ethical Disclaimer
+
+> [!CAUTION]
+> **Authorized Use Only:** This software is intended solely for educational, forensic, and defensive cybersecurity auditing of accounts, domains, and repositories that you personally own or have explicit authorization to inspect. Do not use this tool to probe, scan, or access accounts, servers, or repositories without permission.
+>
+> **Notice:** Reports generated by this software represent automated risk estimates based on heuristic indicators, not definitive or legal proof of a criminal breach.

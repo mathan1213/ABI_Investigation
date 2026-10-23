@@ -13,7 +13,7 @@ from models import (
     TelegramScanResult,
     TelegramSession,
 )
-from modules.network_module import inspect_ip, is_safe_ip
+from modules.network_module import inspect_ip, inspect_link, is_safe_ip
 
 logger = logging.getLogger("telegram_audit")
 
@@ -354,8 +354,8 @@ async def analyze_telegram_account(flow_id: str) -> TelegramScanResult:
                             id=f"tg-dormant-{len(findings) + 1}",
                             type="unknown_device",
                             title=f"Dormant Inactive Device: {dev_model}",
-                            explanation=f"'{dev_model}' has remained logged into your account without activity for over 30 days.",
-                            risk="low",
+                            explanation=f"'{dev_model}' has remained logged into your account without activity for over 30 days. Recommended action: log out old devices.",
+                            risk="medium",
                             date=last_active_str,
                         )
                     )
@@ -454,15 +454,21 @@ async def analyze_telegram_account(flow_id: str) -> TelegramScanResult:
             )
 
         if extracted_urls:
-            findings.append(
-                TelegramFinding(
-                    id=f"tg-link-{len(findings) + 1}",
-                    type="suspicious_link",
-                    title="Suspicious External Links in Login Notices",
-                    explanation=f"Found {len(extracted_urls)} external link(s) in your official security notices that may attempt credential harvesting.",
-                    risk="medium",
-                )
-            )
+            for u in extracted_urls[:5]:
+                try:
+                    link_audit = await inspect_link(u)
+                    if link_audit.verdict in ("Suspicious", "Dangerous"):
+                        findings.append(
+                            TelegramFinding(
+                                id=f"tg-link-{len(findings) + 1}",
+                                type="suspicious_link",
+                                title=f"Suspicious Link in Security Notice: {link_audit.domain}",
+                                explanation=f"A link sent in an official Telegram alert ({u}) was inspected: {link_audit.explanation}",
+                                risk=link_audit.risk_level if link_audit.risk_level in ("high", "critical") else "high",
+                            )
+                        )
+                except Exception:
+                    pass
 
         # 9. Compute risk score & risk level
         crit_count = sum(1 for f in findings if f.risk == "critical")
@@ -509,6 +515,8 @@ async def analyze_telegram_account(flow_id: str) -> TelegramScanResult:
             "Verify your Recovery Email address under Two-Step Verification settings so you never get locked out.",
             "Never share SMS verification codes or login links with anyone, including anyone claiming to be Telegram Support."
         ]
+        if any(f.type == "unknown_device" and "Dormant" in f.title for f in findings):
+            action_checklist.insert(1, "Log out old devices: Open Settings > Devices and terminate sessions older than 30 days.")
 
         return TelegramScanResult(
             phone=phone_masked,
