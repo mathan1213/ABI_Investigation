@@ -84,6 +84,7 @@ export interface IpCheckResult {
   isVpn: boolean;
   isProxy: boolean;
   isTor: boolean;
+  isHosting?: boolean;
   abuseScore: number; // 0 - 100
   verdict: 'Safe' | 'Suspicious' | 'Dangerous';
   riskLevel: RiskLevel;

@@ -31,6 +31,7 @@ class IpCheckResponse(AppBaseModel):
     is_vpn: bool = Field(..., alias="isVpn")
     is_proxy: bool = Field(..., alias="isProxy")
     is_tor: bool = Field(..., alias="isTor")
+    is_hosting: bool = Field(default=False, alias="isHosting")
     abuse_score: int = Field(..., alias="abuseScore", ge=0, le=100)
     verdict: VerdictType
     risk_level: RiskLevel = Field(..., alias="riskLevel")

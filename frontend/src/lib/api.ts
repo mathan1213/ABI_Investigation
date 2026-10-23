@@ -7,15 +7,43 @@ import {
   FullReport,
 } from './types';
 
-// API Base URL constant for future connection to the Python FastAPI backend
-export const API_BASE = "http://localhost:8000";
+// API Base URL constant connecting to the Python FastAPI backend
+export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 // Helper delay simulating network latency (1.2 to 1.8 seconds)
 const wait = (ms = 1400) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Common response handler for network inspection endpoints.
+ * Handles 400 (bad input / SSRF blocked), 429 (rate limit), and unexpected errors.
+ */
+async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promise<T> {
+  if (res.status === 429) {
+    throw new Error("Too many requests, please wait a minute");
+  }
+  if (!res.ok) {
+    try {
+      const errorData = await res.json();
+      if (errorData?.detail) {
+        if (typeof errorData.detail === 'string') {
+          throw new Error(errorData.detail);
+        } else if (Array.isArray(errorData.detail)) {
+          throw new Error(errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', '));
+        }
+      }
+    } catch (e: any) {
+      if (e?.message && e.message !== 'Unexpected end of JSON input') {
+        throw e;
+      }
+    }
+    throw new Error(defaultErrorMsg);
+  }
+  return await res.json() as T;
+}
+
+/**
  * Analyzes a Telegram account for suspicious logins, unexpected sessions, and security weaknesses.
- * Backend equivalent: POST /api/v1/telegram/analyze { phone, otp }
+ * TODO: real backend (POST /api/v1/telegram/analyze)
  */
 export async function analyzeTelegram(phone: string, otp: string): Promise<TelegramScanResult> {
   await wait(1600);
@@ -174,7 +202,7 @@ export async function analyzeTelegram(phone: string, otp: string): Promise<Teleg
 
 /**
  * Scans a public GitHub repository for leaked passwords, API keys, vulnerable packages, and unsafe code.
- * Backend equivalent: POST /api/v1/repo/scan { repo_url }
+ * TODO: real backend (POST /api/v1/repo/scan)
  */
 export async function scanRepo(repoUrl: string): Promise<RepoScanResult> {
   await wait(1800);
@@ -267,175 +295,61 @@ export async function scanRepo(repoUrl: string): Promise<RepoScanResult> {
 
 /**
  * Checks an IP address for bad reputation, proxy/VPN/Tor usage, and malicious history.
- * Backend equivalent: GET /api/v1/network/ip?ip={ip}
+ * Real backend endpoint: POST /api/network/ip
  */
 export async function checkIp(ip: string): Promise<IpCheckResult> {
-  await wait(1300);
-
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/network/ip?ip=${encodeURIComponent(ip)}`);
-  // return await res.json();
-
-  const isTorOrSuspicious = ip.includes('185') || ip.includes('91') || ip.includes('194') || ip.toLowerCase().includes('bad');
-
-  if (isTorOrSuspicious) {
-    return {
-      ip,
-      country: 'Germany',
-      city: 'Frankfurt am Main',
-      isp: 'M247 Europe Cyber Services',
-      asn: 'AS9009 (M247 Ltd)',
-      isVpn: true,
-      isProxy: true,
-      isTor: true,
-      abuseScore: 89,
-      verdict: 'Dangerous',
-      riskLevel: 'critical',
-      explanation: 'This IP address is a known Tor anonymizer and proxy node commonly used by automated attack scripts. It has been reported 1,420 times for unauthorized login attempts.',
-      timestamp: new Date().toISOString(),
-    };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/network/ip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: ip.trim() }),
+    });
+  } catch {
+    throw new Error("Cannot reach the analysis server. Is the backend running?");
   }
-
-  return {
-    ip,
-    country: 'United States',
-    city: 'San Jose, California',
-    isp: 'Comcast Cable Communications',
-    asn: 'AS7922 (Comcast)',
-    isVpn: false,
-    isProxy: false,
-    isTor: false,
-    abuseScore: 0,
-    verdict: 'Safe',
-    riskLevel: 'low',
-    explanation: 'This IP address is a standard home residential internet connection with a clean reputation and zero attack reports.',
-    timestamp: new Date().toISOString(),
-  };
+  return await handleResponse<IpCheckResult>(res, 'Failed to inspect IP address');
 }
 
 /**
  * Checks a suspicious link or URL for phishing redirects, domain age, and fake identity.
- * Backend equivalent: GET /api/v1/network/link?url={url}
+ * Real backend endpoint: POST /api/network/link
  */
 export async function checkLink(url: string): Promise<LinkCheckResult> {
-  await wait(1500);
-
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/network/link?url=${encodeURIComponent(url)}`);
-  // return await res.json();
-
-  const isPhishingSample = !url.includes('google.com') && !url.includes('github.com') && !url.includes('apple.com');
-
-  if (isPhishingSample) {
-    return {
-      url,
-      domainAge: '3 days old (Registered October 20, 2026)',
-      dnsRecords: {
-        a: ['104.21.55.19', '172.67.182.201'],
-        mx: ['mail.private-relay-shield.cc'],
-        txt: ['v=spf1 ~all', 'verification=phish-hunter-flagged'],
-      },
-      sslValid: true,
-      sslIssuer: "Let's Encrypt Free Authority (Generated 3 days ago)",
-      redirectChain: [
-        { step: 1, url: url, status: 301, note: 'Initial link shortener redirect' },
-        { step: 2, url: 'https://security-verify-telegram-login.cc/login', status: 302, note: 'Cloaked redirect to fake portal' },
-        { step: 3, url: 'https://auth-session-harvest.ru/verify', status: 200, note: 'Final fake login page that steals passwords' }
-      ],
-      reputationScore: 14,
-      verdict: 'Dangerous',
-      riskLevel: 'critical',
-      explanation: 'This link is a fake phishing scam! It pretends to be an official security verification page to trick you into entering your phone number and SMS code.',
-      timestamp: new Date().toISOString(),
-    };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/network/link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url.trim() }),
+    });
+  } catch {
+    throw new Error("Cannot reach the analysis server. Is the backend running?");
   }
-
-  return {
-    url,
-    domainAge: '14 years old',
-    dnsRecords: {
-      a: ['140.82.112.3'],
-      mx: ['aspmx.l.google.com'],
-      txt: ['v=spf1 include:_spf.google.com ~all']
-    },
-    sslValid: true,
-    sslIssuer: 'DigiCert Global Root G2',
-    redirectChain: [
-      { step: 1, url: url, status: 200, note: 'Direct secure connection' }
-    ],
-    reputationScore: 98,
-    verdict: 'Safe',
-    riskLevel: 'low',
-    explanation: 'This is a genuine, well-established website with a verified SSL certificate and no reports of malicious behavior.',
-    timestamp: new Date().toISOString(),
-  };
+  return await handleResponse<LinkCheckResult>(res, 'Failed to inspect suspicious link');
 }
 
 /**
  * Checks a website domain for open doors (ports), certificate expiration, and browser safety shields.
- * Backend equivalent: GET /api/v1/network/website?domain={domain}
+ * Real backend endpoint: POST /api/network/website
  */
 export async function checkWebsite(domain: string): Promise<WebsiteCheckResult> {
-  await wait(1600);
-
-  // In production with FastAPI:
-  // const res = await fetch(`${API_BASE}/api/v1/network/website?domain=${encodeURIComponent(domain)}`);
-  // return await res.json();
-
-  const isFlawed = domain.includes('demo') || domain.includes('test') || domain.includes('portal') || !domain.includes('google.com');
-
-  if (isFlawed) {
-    return {
-      domain,
-      riskScore: 65,
-      riskLevel: 'medium',
-      verdict: 'Suspicious',
-      explanation: 'The website has unencrypted ports open and is missing modern browser security shields that stop hackers from spoofing or stealing customer cookies.',
-      sslExpiry: 'November 14, 2026',
-      sslDaysRemaining: 22,
-      timestamp: new Date().toISOString(),
-      ports: [
-        { port: 80, service: 'HTTP (Web)', state: 'Open', risk: 'medium', note: 'Does not automatically forward visitors to secure HTTPS.' },
-        { port: 443, service: 'HTTPS (Secure Web)', state: 'Open', risk: 'low', note: 'Secure web server is working.' },
-        { port: 22, service: 'SSH (Remote Administration)', state: 'Open', risk: 'high', note: 'Remote server login port is exposed to the entire internet.' },
-        { port: 21, service: 'FTP (File Transfer)', state: 'Closed', risk: 'low', note: 'Insecure file transfer port is safely closed.' }
-      ],
-      securityHeaders: [
-        { header: 'Content-Security-Policy', status: 'Fail', description: 'Stops malicious scripts and hacker popups from running in visitors\' browsers.' },
-        { header: 'Strict-Transport-Security (HSTS)', status: 'Fail', description: 'Forces all web browsers to use encrypted connections exclusively.' },
-        { header: 'X-Frame-Options', status: 'Fail', description: 'Prevents hackers from embedding your site inside invisible clickjacking frames.' },
-        { header: 'X-Content-Type-Options', status: 'Pass', description: 'Stops browsers from mistakenly executing images as computer code.' }
-      ]
-    };
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/network/website`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: domain.trim() }),
+    });
+  } catch {
+    throw new Error("Cannot reach the analysis server. Is the backend running?");
   }
-
-  return {
-    domain,
-    riskScore: 10,
-    riskLevel: 'low',
-    verdict: 'Safe',
-    explanation: 'This website is securely configured with strong encryption, modern safety headers, and zero open administrative ports.',
-    sslExpiry: 'October 15, 2027',
-    sslDaysRemaining: 357,
-    timestamp: new Date().toISOString(),
-    ports: [
-      { port: 80, service: 'HTTP (Web)', state: 'Open', risk: 'low', note: 'Properly redirects all traffic to HTTPS.' },
-      { port: 443, service: 'HTTPS (Secure Web)', state: 'Open', risk: 'low', note: 'Modern TLS 1.3 encryption enabled.' },
-      { port: 22, service: 'SSH (Server Control)', state: 'Closed', risk: 'low', note: 'Safely protected behind a firewall.' },
-      { port: 21, service: 'FTP (File Transfer)', state: 'Closed', risk: 'low', note: 'Port closed.' }
-    ],
-    securityHeaders: [
-      { header: 'Content-Security-Policy', status: 'Pass', description: 'Strict script boundaries active.' },
-      { header: 'Strict-Transport-Security (HSTS)', status: 'Pass', description: 'Browser enforces HTTPS at all times.' },
-      { header: 'X-Frame-Options', status: 'Pass', description: 'Clickjacking protection is active.' },
-      { header: 'X-Content-Type-Options', status: 'Pass', description: 'MIME-sniffing protection enabled.' }
-    ]
-  };
+  return await handleResponse<WebsiteCheckResult>(res, 'Failed to inspect website');
 }
 
 /**
  * Compiles a comprehensive full investigation report across all scanned channels.
- * Backend equivalent: GET /api/v1/report
+ * TODO: real backend (GET /api/v1/report)
  */
 export async function getReport(): Promise<FullReport> {
   await wait(1200);

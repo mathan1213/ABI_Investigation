@@ -57,14 +57,46 @@ const WEBSITE_MESSAGES = [
   'Compiling plain-English server risk report...',
 ];
 
+/**
+ * Checks if a target string points to a private, loopback, link-local, or reserved address.
+ */
+function isPrivateOrLoopback(target: string): boolean {
+  const clean = target.trim().toLowerCase().replace(/^https?:\/\//i, '').split(/[:/?#]/)[0];
+  if (!clean) return false;
+  if (
+    clean === 'localhost' ||
+    clean.endsWith('.localhost') ||
+    clean.endsWith('.local') ||
+    clean.endsWith('.internal')
+  ) {
+    return true;
+  }
+  // IPv4 checks
+  if (clean === '0.0.0.0') return true;
+  if (clean.startsWith('127.')) return true;
+  if (clean.startsWith('10.')) return true;
+  if (clean.startsWith('192.168.')) return true;
+  if (clean.startsWith('169.254.')) return true;
+  const match172 = clean.match(/^172\.(\d+)\./);
+  if (match172) {
+    const second = parseInt(match172[1], 10);
+    if (second >= 16 && second <= 31) return true;
+  }
+  // IPv6 checks
+  if (clean === '::1' || clean === '::' || clean.startsWith('fe80:') || clean.startsWith('fc00:') || clean.startsWith('fd00:')) {
+    return true;
+  }
+  return false;
+}
+
 export const NetworkCheck: React.FC = () => {
-  const { networkScan, setIpScan, setLinkScan, setWebsiteScan } = useScan();
+  const { networkScan, setIpScan, setLinkScan, setWebsiteScan, addToast } = useScan();
   const [activeTab, setActiveTab] = useState<'ip' | 'link' | 'website'>('ip');
 
   // Form states
-  const [ipInput, setIpInput] = useState(networkScan.ipResult ? networkScan.ipResult.ip : '185.220.101.5');
-  const [linkInput, setLinkInput] = useState(networkScan.linkResult ? networkScan.linkResult.url : 'https://security-verify-telegram.cc/login');
-  const [websiteInput, setWebsiteInput] = useState(networkScan.websiteResult ? networkScan.websiteResult.domain : 'portal.example-cloud.io');
+  const [ipInput, setIpInput] = useState(networkScan.ipResult ? networkScan.ipResult.ip : '8.8.8.8');
+  const [linkInput, setLinkInput] = useState(networkScan.linkResult ? networkScan.linkResult.url : 'https://google.com');
+  const [websiteInput, setWebsiteInput] = useState(networkScan.websiteResult ? networkScan.websiteResult.domain : 'google.com');
 
   // Loading states
   const [isScanning, setIsScanning] = useState(false);
@@ -72,17 +104,42 @@ export const NetworkCheck: React.FC = () => {
 
   // Tab 1: IP Scan handler
   const handleCheckIp = async (targetIp = ipInput) => {
-    if (!targetIp || targetIp.trim().length < 7) {
-      setErrorMsg('Please enter a valid IP address (e.g. 185.220.101.5).');
+    const trimmed = targetIp.trim();
+    if (!trimmed) {
+      setErrorMsg('Please enter an IP address to inspect.');
       return;
     }
+    if (isPrivateOrLoopback(trimmed)) {
+      setErrorMsg('Private and internal network addresses (such as 127.x, 192.168.x, 10.x, or localhost) cannot be inspected because they are not accessible from the public internet.');
+      return;
+    }
+    const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(trimmed);
+    const isIpv6 = trimmed.includes(':');
+    if (!isIpv4 && !isIpv6) {
+      setErrorMsg('Please enter a valid IPv4 or IPv6 address (e.g. 8.8.8.8).');
+      return;
+    }
+    if (isIpv4) {
+      const octets = trimmed.split('.').map(Number);
+      if (octets.some((n) => isNaN(n) || n < 0 || n > 255)) {
+        setErrorMsg('Invalid IP address format: octets must be numbers between 0 and 255.');
+        return;
+      }
+    }
+
     setErrorMsg(null);
     setIsScanning(true);
     try {
-      const res: IpCheckResult = await checkIp(targetIp);
+      const res: IpCheckResult = await checkIp(trimmed);
       setIpScan(res);
-    } catch {
-      setErrorMsg('Failed to check IP address reputation.');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to check IP address reputation.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'IP Inspection Error',
+        message: msg,
+      });
     } finally {
       setIsScanning(false);
     }
@@ -90,17 +147,33 @@ export const NetworkCheck: React.FC = () => {
 
   // Tab 2: Link Scan handler
   const handleCheckLink = async (targetUrl = linkInput) => {
-    if (!targetUrl || !targetUrl.includes('.')) {
-      setErrorMsg('Please enter a valid web URL or link (e.g. https://example.com).');
+    const trimmed = targetUrl.trim();
+    if (!trimmed) {
+      setErrorMsg('Please enter a web link or URL to inspect.');
       return;
     }
+    if (isPrivateOrLoopback(trimmed)) {
+      setErrorMsg('Private and internal links (such as localhost or internal IPs) cannot be inspected because they are not reachable on the public web.');
+      return;
+    }
+    if (!trimmed.includes('.') && !trimmed.startsWith('http')) {
+      setErrorMsg('Please enter a valid web link or URL (e.g. https://example.com).');
+      return;
+    }
+
     setErrorMsg(null);
     setIsScanning(true);
     try {
-      const res: LinkCheckResult = await checkLink(targetUrl);
+      const res: LinkCheckResult = await checkLink(trimmed);
       setLinkScan(res);
-    } catch {
-      setErrorMsg('Failed to inspect suspicious link.');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to inspect suspicious link.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Link Inspection Error',
+        message: msg,
+      });
     } finally {
       setIsScanning(false);
     }
@@ -108,17 +181,33 @@ export const NetworkCheck: React.FC = () => {
 
   // Tab 3: Website Scan handler
   const handleCheckWebsite = async (targetDomain = websiteInput) => {
-    if (!targetDomain || targetDomain.trim().length < 3) {
-      setErrorMsg('Please enter a domain name (e.g. example.com).');
+    const trimmed = targetDomain.trim();
+    if (!trimmed) {
+      setErrorMsg('Please enter a website domain name (e.g. google.com).');
       return;
     }
+    if (isPrivateOrLoopback(trimmed)) {
+      setErrorMsg('Local or private hostnames (such as localhost) cannot be inspected because they only exist on your private machine.');
+      return;
+    }
+    if (!trimmed.includes('.') || trimmed.length < 3) {
+      setErrorMsg('Please enter a valid domain name with an extension (e.g. google.com).');
+      return;
+    }
+
     setErrorMsg(null);
     setIsScanning(true);
     try {
-      const res: WebsiteCheckResult = await checkWebsite(targetDomain);
+      const res: WebsiteCheckResult = await checkWebsite(trimmed);
       setWebsiteScan(res);
-    } catch {
-      setErrorMsg('Failed to inspect website server security.');
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to inspect website server security.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Website Inspection Error',
+        message: msg,
+      });
     } finally {
       setIsScanning(false);
     }
@@ -288,6 +377,11 @@ export const NetworkCheck: React.FC = () => {
                     isDanger: networkScan.ipResult.isTor,
                   },
                   {
+                    label: 'Hosting / Cloud Datacenter',
+                    value: networkScan.ipResult.isHosting ? 'Datacenter / Cloud Server' : 'Residential / Broadband',
+                    isDanger: false,
+                  },
+                  {
                     label: 'Recommendation',
                     value: networkScan.ipResult.abuseScore > 50 ? 'Block Immediately' : 'Allow Traffic',
                     isDanger: networkScan.ipResult.abuseScore > 50,
@@ -295,10 +389,10 @@ export const NetworkCheck: React.FC = () => {
                 ]}
               />
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
-                    <span>Tor Network Check</span>
+                    <span>Tor Exit Node</span>
                     {networkScan.ipResult.isTor ? (
                       <span className="text-red-400 font-bold">YES</span>
                     ) : (
@@ -306,33 +400,49 @@ export const NetworkCheck: React.FC = () => {
                     )}
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Tor nodes allow individuals to completely hide their real location. Criminals frequently use Tor to launch password-guessing attacks.
+                    Tor nodes allow individuals to completely hide their real location. Attackers frequently use them for brute-force attacks.
                   </p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
-                    <span>Commercial VPN Check</span>
-                    {networkScan.ipResult.isVpn ? (
+                    <span>VPN / Proxy</span>
+                    {networkScan.ipResult.isVpn || networkScan.ipResult.isProxy ? (
                       <span className="text-yellow-400 font-bold">YES</span>
                     ) : (
                       <span className="text-emerald-400 font-bold">NO</span>
                     )}
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Datacenter or proxy IP. If this login was not made by you turning on a private VPN, someone else used a relay service.
+                    Anonymizing relay or commercial VPN disguising the originating device.
                   </p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
-                    <span>Attack Reports</span>
+                    <span>Hosting / Cloud</span>
+                    {networkScan.ipResult.isHosting ? (
+                      <span className="text-cyan-400 font-bold">DATACENTER</span>
+                    ) : (
+                      <span className="text-emerald-400 font-bold">RESIDENTIAL</span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    {networkScan.ipResult.isHosting
+                      ? 'Cloud datacenter server rather than a private residential broadband connection.'
+                      : 'Standard residential or consumer broadband internet connection.'}
+                  </p>
+                </div>
+
+                <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                    <span>Abuse Score</span>
                     <span className="text-cyan-400 font-bold font-mono">
-                      {networkScan.ipResult.abuseScore > 50 ? '1,420 Reports' : '0 Reports'}
+                      {networkScan.ipResult.abuseScore} / 100
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Verified security report frequency logged across worldwide web firewalls over the last 30 days.
+                    Calculated confidence rating based on threat intelligence reports and server signals.
                   </p>
                 </div>
               </div>
