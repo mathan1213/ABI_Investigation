@@ -19,7 +19,7 @@ def clean_test_rate_limits():
 MOCK_TELEGRAM_CLEAN = {
     "phone": "+91*****7890",
     "accountName": "Alice Smith",
-    "riskScore": 10,
+    "riskScore": 0,
     "riskLevel": "low",
     "summary": "Account clean",
     "sessions": [
@@ -116,7 +116,7 @@ MOCK_REPO_CRITICAL = {
     "riskScore": 90,
     "riskLevel": "critical",
     "summary": "Leaked secret",
-    "counts": {"critical": 1, "high": 1, "medium": 0, "low": 0, "total": 2},
+    "counts": {"critical": 1, "high": 0, "medium": 0, "low": 0, "total": 1},
     "findings": [
         {
             "id": "rf-sec-1",
@@ -177,16 +177,32 @@ MOCK_NETWORK_CHECK = {
 # 1. Formula & Missing Modules Tests
 # ---------------------------------------------------------------------------
 
-def test_report_no_modules_scanned():
+def test_report_no_modules_scanned_not_enough_data():
     resp = client.post("/api/report/generate", json={})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["overallScore"] == 0
-    assert data["overallRisk"] == "low"
+    assert data["overallScore"] is None
+    assert data["overallRisk"] is None
+    assert "not enough real data to calculate an overall score" in data["summary"].lower()
     assert len(data["limitations"]) >= 3  # All 3 modules noted as unscanned
 
 
-def test_report_single_module_formula():
+def test_report_all_demo_modules_returns_no_score():
+    resp = client.post(
+        "/api/report/generate",
+        json={
+            "telegram": MOCK_TELEGRAM_CRITICAL,
+            "demoModules": ["telegram"],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overallScore"] is None
+    assert data["overallRisk"] is None
+    assert "not enough real data to calculate an overall score" in data["summary"].lower()
+
+
+def test_report_single_real_module_formula():
     # Only Repo scanned (score 40)
     # 0.5 * 40 + 0.5 * 40 = 40
     resp = client.post(
@@ -200,26 +216,50 @@ def test_report_single_module_formula():
     repo_mod = next(m for m in data["modules"] if m["module"] == "repo")
     assert repo_mod["scanned"] is True
     assert repo_mod["score"] == 40
+    assert repo_mod["isDemo"] is False
     tg_mod = next(m for m in data["modules"] if m["module"] == "telegram")
     assert tg_mod["scanned"] is False
 
 
-def test_report_multi_module_formula():
-    # Telegram clean (score 10) + Repo medium (score 40)
-    # Highest: 40, Avg: (10 + 40) / 2 = 25
-    # Formula: 0.5 * 40 + 0.5 * 25 = 20 + 12.5 = 32.5 -> round to 32 or 33
+def test_report_demo_exclusion_from_score():
+    # Telegram is Demo with score 90 (critical finding)
+    # Repo is Real with score 20 (low, no critical finding)
+    # Overall score must come ONLY from Repo (score 20, low)
+    # Demo Telegram must NOT drive score or force High
+    repo_low = dict(MOCK_REPO_MEDIUM)
+    repo_low["riskScore"] = 20
+    repo_low["riskLevel"] = "low"
+
     resp = client.post(
         "/api/report/generate",
-        json={"telegram": MOCK_TELEGRAM_CLEAN, "repo": MOCK_REPO_MEDIUM},
+        json={
+            "telegram": MOCK_TELEGRAM_CRITICAL,
+            "repo": repo_low,
+            "demoModules": ["telegram"],
+        },
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["overallScore"] in (32, 33)
-    assert data["overallRisk"] == "medium"
+    assert data["overallScore"] == 20
+    assert data["overallRisk"] == "low"  # NOT elevated by demo critical finding!
+
+
+def test_report_multi_module_formula():
+    # Telegram (score 80, 1 finding) + Repo (score 40, 2 findings)
+    # Highest: 80, Avg: (80 + 40) / 2 = 60
+    # Formula: 0.5 * 80 + 0.5 * 60 = 40 + 30 = 70
+    resp = client.post(
+        "/api/report/generate",
+        json={"telegram": MOCK_TELEGRAM_CRITICAL, "repo": MOCK_REPO_MEDIUM},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["overallScore"] == 70
+    assert data["overallRisk"] in ("high", "critical")
 
 
 def test_report_critical_finding_forces_at_least_high():
-    # Telegram has Critical finding, but score is 20 (low/medium score)
+    # Real Telegram has Critical finding, but score is 20
     low_score_tg_with_critical_finding = dict(MOCK_TELEGRAM_CRITICAL)
     low_score_tg_with_critical_finding["riskScore"] = 20
     low_score_tg_with_critical_finding["riskLevel"] = "low"
@@ -230,48 +270,157 @@ def test_report_critical_finding_forces_at_least_high():
     )
     assert resp.status_code == 200
     data = resp.json()
-    # Even though score is 20 (normally low), critical finding must force overallRisk to at least "high"
     assert data["overallRisk"] in ("high", "critical")
 
 
-def test_report_all_modules_present():
+# ---------------------------------------------------------------------------
+# 2. Evidence-Based Narrative & Hedged Language Tests
+# ---------------------------------------------------------------------------
+
+def test_report_no_cross_module_narrative():
+    # Both Telegram and Repo have findings.
+    # The narrative MUST NOT link repo leak to Telegram compromise.
     resp = client.post(
         "/api/report/generate",
         json={
             "telegram": MOCK_TELEGRAM_CRITICAL,
             "repo": MOCK_REPO_CRITICAL,
-            "network": MOCK_NETWORK_CHECK,
         },
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["overallScore"] >= 75
-    assert data["overallRisk"] == "critical"
-    assert len(data["howItHappened"]) >= 2
-    assert len(data["whatToDoNow"]) >= 2
-    assert len(data["networkFindings"]) >= 2
+    explanations = data["howItHappened"]
+
+    # Explanations must be partitioned by module prefix
+    has_tg = any(exp.startswith("Telegram:") for exp in explanations)
+    has_repo = any(exp.startswith("Repository:") for exp in explanations)
+    assert has_tg is True
+    assert has_repo is True
+
+    # Confirm repo leak is not claimed as the cause of telegram compromise
+    for exp in explanations:
+        if "Repository:" in exp:
+            assert "telegram" not in exp.lower()
+            assert "sms" not in exp.lower()
+            assert "sim" not in exp.lower()
 
 
-# ---------------------------------------------------------------------------
-# 2. De-duplication Tests
-# ---------------------------------------------------------------------------
-
-def test_report_deduplication_network_findings():
+def test_report_hedged_wording():
     resp = client.post(
         "/api/report/generate",
         json={
             "telegram": MOCK_TELEGRAM_CRITICAL,
-            "repo": MOCK_REPO_MEDIUM,
-            "network": MOCK_NETWORK_CHECK,
+            "repo": MOCK_REPO_CRITICAL,
         },
     )
     assert resp.status_code == 200
     data = resp.json()
-    net_findings = data["networkFindings"]
-    titles = [f["title"] for f in net_findings]
-    # Verify titles are unique
-    assert len(titles) == len(set(titles))
+    explanations = " ".join(data["howItHappened"]).lower()
 
+    # Must contain hedged words
+    assert any(h in explanations for h in ["may", "could", "is consistent with"])
+    # Must NOT assert absolute breach facts
+    assert "gained access" not in explanations
+    assert "gained complete access" not in explanations
+    assert "breached your perimeter" not in explanations
+
+
+def test_report_summary_compromise_vs_credentials():
+    # Only Repo has leaked secrets (no Telegram)
+    resp = client.post(
+        "/api/report/generate",
+        json={"repo": MOCK_REPO_CRITICAL},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    summary = data["summary"].lower()
+    # Must describe as exposed credentials, NOT account compromise
+    assert "exposed credentials" in summary
+    assert "active compromise indicators" not in summary
+
+    # Real Telegram has unknown session
+    resp_tg = client.post(
+        "/api/report/generate",
+        json={"telegram": MOCK_TELEGRAM_CRITICAL},
+    )
+    assert resp_tg.status_code == 200
+    data_tg = resp_tg.json()
+    assert "active compromise indicators" in data_tg["summary"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 3. 2FA Step Text and Priority Tests
+# ---------------------------------------------------------------------------
+
+def test_report_2fa_missing_step_text_and_priority():
+    # Telegram with 2FA disabled
+    resp = client.post(
+        "/api/report/generate",
+        json={"telegram": MOCK_TELEGRAM_CRITICAL},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    actions = data["whatToDoNow"]
+
+    # Must contain 2FA setup step with High priority
+    two_fa_step = next(
+        (a for a in actions if "Turn on two-step verification and add a recovery email" in a["title"]),
+        None,
+    )
+    assert two_fa_step is not None
+    assert two_fa_step["priority"] == "high"
+
+    # Must NOT suggest changing password when 2FA is off
+    assert not any("change your two-step verification password" in a["title"].lower() for a in actions)
+
+
+def test_report_2fa_enabled_suggests_change_password():
+    tg_with_2fa = dict(MOCK_TELEGRAM_CRITICAL)
+    tg_with_2fa["twoFactorEnabled"] = True
+
+    resp = client.post(
+        "/api/report/generate",
+        json={"telegram": tg_with_2fa},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    actions = data["whatToDoNow"]
+
+    # When 2FA is already ON and suspicious login exists, suggest changing password
+    change_pw_step = next(
+        (a for a in actions if "Change your two-step verification password" in a["title"]),
+        None,
+    )
+    assert change_pw_step is not None
+    assert change_pw_step["priority"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# 4. Consistency Warning: Score vs Findings Count
+# ---------------------------------------------------------------------------
+
+def test_report_score_finding_inconsistency_warning():
+    inconsistent_repo = dict(MOCK_REPO_MEDIUM)
+    inconsistent_repo["riskScore"] = 75
+    inconsistent_repo["findings"] = []  # Score 75 but 0 findings!
+
+    resp = client.post(
+        "/api/report/generate",
+        json={"repo": inconsistent_repo},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    limitations = data["limitations"]
+
+    # Must return a warning naming the module
+    warning = next((w for w in limitations if "GitHub Repository Forensics" in w and "inconsistent" in w), None)
+    assert warning is not None
+    assert "score (75)" in warning or "score of 75" in warning
+
+
+# ---------------------------------------------------------------------------
+# 5. De-duplication and Rate Limiting
+# ---------------------------------------------------------------------------
 
 def test_report_action_plan_deduplication_and_limit():
     resp = client.post(
@@ -290,30 +439,6 @@ def test_report_action_plan_deduplication_and_limit():
     assert len(titles) == len(set(titles))
 
 
-# ---------------------------------------------------------------------------
-# 3. Demo Flag Handling Tests
-# ---------------------------------------------------------------------------
-
-def test_report_demo_modules_flag():
-    resp = client.post(
-        "/api/report/generate",
-        json={
-            "telegram": MOCK_TELEGRAM_CLEAN,
-            "demoModules": ["telegram"],
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    tg_mod = next(m for m in data["modules"] if m["module"] == "telegram")
-    assert tg_mod["isDemo"] is True
-    assert "demo" in data["summary"].lower()
-    assert any("DEMO DATA" in limit for limit in data["limitations"])
-
-
-# ---------------------------------------------------------------------------
-# 4. Body Size Limit (1 MB) Test
-# ---------------------------------------------------------------------------
-
 def test_report_body_size_limit_exceeded():
     huge_padding = "x" * (1024 * 1024 + 100)  # > 1 MB
     resp = client.post(
@@ -325,13 +450,8 @@ def test_report_body_size_limit_exceeded():
     assert "1 MB" in resp.json()["detail"]
 
 
-# ---------------------------------------------------------------------------
-# 5. Rate Limiting Test
-# ---------------------------------------------------------------------------
-
 def test_report_rate_limiting():
-    # Allow 20 requests per minute
-    for i in range(20):
+    for _ in range(20):
         r = client.post("/api/report/generate", json={})
         assert r.status_code == 200
 

@@ -142,13 +142,15 @@ export const Report: React.FC = () => {
       // First Page
       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
 
-      // Add Running Footer on Page 1
+      // Add Running Footer on Page 1 with dedicated solid background bar
+      pdf.setFillColor(11, 18, 32); // Dark navy #0B1220 matching UI theme
+      pdf.rect(0, 287, 210, 10, 'F');
       pdf.setFontSize(8);
       pdf.setTextColor(148, 163, 184); // Slate-400
       pdf.text(
         'This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach. • Page 1',
         105,
-        292,
+        293,
         { align: 'center' }
       );
 
@@ -161,13 +163,15 @@ export const Report: React.FC = () => {
         pageNum += 1;
         pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
 
-        // Add Running Footer on every page
+        // Add Running Footer on every page with dedicated solid background bar
+        pdf.setFillColor(11, 18, 32);
+        pdf.rect(0, 287, 210, 10, 'F');
         pdf.setFontSize(8);
         pdf.setTextColor(148, 163, 184);
         pdf.text(
           `This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach. • Page ${pageNum}`,
           105,
-          292,
+          293,
           { align: 'center' }
         );
 
@@ -243,7 +247,7 @@ export const Report: React.FC = () => {
   const displayLimitations = reportData?.limitations || [];
   const displayMethodology =
     reportData?.methodology ||
-    'Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed modules. If any module contains a finding with Critical severity, the composite risk rating is elevated to at least High.';
+    'Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed real-data modules. Demo modules are strictly excluded from the overall score and the Critical-forces-High rule. If any real module contains a finding with Critical severity, the composite risk rating is elevated to at least High. Unscanned and demo modules are omitted from the computation.';
   const isAnyDemo = (reportData?.demoModules && reportData.demoModules.length > 0) || demoModules.length > 0;
 
   // Chart data
@@ -312,6 +316,27 @@ export const Report: React.FC = () => {
         </div>
       )}
 
+      {/* Top Banner: Includes demo data / Based on real scans */}
+      {isAnyDemo ? (
+        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3 no-print">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+            <span className="font-semibold">Includes demo data</span>
+            <span className="text-slate-300 hidden sm:inline">— Demo modules are excluded from the composite risk score.</span>
+          </div>
+          <span className="text-[11px] font-mono bg-amber-500/20 px-2 py-0.5 rounded text-amber-200">Demo Data Active</span>
+        </div>
+      ) : hasAnyScan ? (
+        <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center justify-between gap-3 no-print">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
+            <span className="font-semibold">Based on real scans</span>
+            <span className="text-slate-300 hidden sm:inline">— All evaluated modules reflect real data and verified account credentials.</span>
+          </div>
+          <span className="text-[11px] font-mono bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-200">Verified Signals</span>
+        </div>
+      ) : null}
+
       {/* PRINTABLE / EXPORTABLE REPORT CONTAINER */}
       <div
         ref={reportRef}
@@ -338,7 +363,11 @@ export const Report: React.FC = () => {
           </div>
 
           <div className="shrink-0 flex items-center gap-2">
-            <RiskBadge level={displayRisk} size="lg" />
+            <RiskBadge
+              level={displayRisk ?? 'low'}
+              size="lg"
+              label={displayScore === null ? 'Demo Only' : undefined}
+            />
           </div>
         </div>
 
@@ -355,7 +384,7 @@ export const Report: React.FC = () => {
                 {reportData?.demoModules && reportData.demoModules.length > 0
                   ? `(${reportData.demoModules.join(', ')})`
                   : ''}
-                . Findings in demo-flagged sections are illustrative test scenarios and do not indicate a verified compromise on your real account.
+                . Findings in demo-flagged sections are illustrative test scenarios and are excluded from the overall score.
               </p>
             </div>
           </div>
@@ -368,7 +397,9 @@ export const Report: React.FC = () => {
               Executive Finding Summary
             </span>
             <h3 className="text-xl font-bold text-white leading-snug">
-              {displayRisk === 'critical' || displayRisk === 'high'
+              {displayScore === null
+                ? 'Not enough real data to calculate an overall score'
+                : displayRisk === 'critical' || displayRisk === 'high'
                 ? 'High security threat: critical vulnerabilities or active foreign intrusions require remediation.'
                 : displayRisk === 'medium'
                 ? 'Moderate exposure: defensive gaps were detected across audited infrastructure.'
@@ -380,12 +411,17 @@ export const Report: React.FC = () => {
           </div>
 
           <div className="shrink-0 flex flex-col items-center">
-            <RiskGauge score={displayScore} level={displayRisk} size="md" />
+            <RiskGauge score={displayScore ?? 0} level={displayRisk ?? 'low'} size="md" />
+            {displayScore === null && (
+              <span className="text-[11px] font-mono text-amber-300 mt-2 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                Demo Data Only
+              </span>
+            )}
           </div>
         </div>
 
         {/* Section 1: Per-Module Breakdown */}
-        <div className="space-y-4">
+        <div className="space-y-6">
           <div className="border-b border-slate-800 pb-2">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">1</span>
@@ -393,119 +429,198 @@ export const Report: React.FC = () => {
             </h3>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Telegram Module */}
-            <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase">
-                    <Send size={14} />
-                    <span>Telegram</span>
+          {/* Real Data Modules Section */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <ShieldCheck size={14} className="text-emerald-400" />
+              <span>Real Scanned Modules (Drive Overall Score)</span>
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Telegram Module (if Real) */}
+              {telegramScan && !demoModules.includes('telegram') && !telegramScan.isDemo && (
+                <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase">
+                        <Send size={14} />
+                        <span>Telegram</span>
+                      </div>
+                      <RiskBadge level={telegramScan.riskLevel} size="sm" />
+                    </div>
+                    <h4 className="text-sm font-bold text-white mb-1">{telegramScan.phone}</h4>
+                    <p className="text-xs text-slate-300 leading-relaxed">{telegramScan.summary}</p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {(demoModules.includes('telegram') || telegramScan?.isDemo) && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        Demo Data
-                      </span>
-                    )}
-                    <RiskBadge level={telegramScan ? telegramScan.riskLevel : 'low'} size="sm" />
-                  </div>
+                  <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                    {telegramScan.sessions.length} session(s) audited, {telegramScan.findings.length} finding(s)
+                  </span>
                 </div>
-                <h4 className="text-sm font-bold text-white mb-1">
-                  {telegramScan ? telegramScan.phone : 'Not Scanned Yet'}
-                </h4>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {telegramScan
-                    ? telegramScan.summary
-                    : 'Module not executed during this session. Run Telegram Check to inspect active sessions.'}
-                </p>
-              </div>
-              <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                {telegramScan ? `${telegramScan.sessions.length} session(s) audited` : 'No sessions tested'}
-              </span>
-            </div>
+              )}
 
-            {/* Repo Module */}
-            <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase">
-                    <GitBranch size={14} />
-                    <span>GitHub Code</span>
+              {/* Repo Module (if Real) */}
+              {repoScan && !demoModules.includes('repo') && !repoScan.isDemo && (
+                <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase">
+                        <GitBranch size={14} />
+                        <span>GitHub Code</span>
+                      </div>
+                      <RiskBadge level={repoScan.riskLevel} size="sm" />
+                    </div>
+                    <h4 className="text-sm font-bold text-white mb-1 truncate">{repoScan.repoName}</h4>
+                    <p className="text-xs text-slate-300 leading-relaxed">{repoScan.summary}</p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {demoModules.includes('repo') && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        Demo Data
-                      </span>
-                    )}
-                    <RiskBadge level={repoScan ? repoScan.riskLevel : 'low'} size="sm" />
-                  </div>
+                  <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                    {repoScan.counts.total} finding(s) in {repoScan.scannedFilesCount} file(s)
+                  </span>
                 </div>
-                <h4 className="text-sm font-bold text-white mb-1 truncate">
-                  {repoScan ? repoScan.repoName : 'Not Scanned Yet'}
-                </h4>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {repoScan
-                    ? repoScan.summary
-                    : 'Module not executed during this session. Run Repo Check to scan for leaked credentials.'}
-                </p>
-              </div>
-              <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                {repoScan ? `${repoScan.counts.total} finding(s) in ${repoScan.scannedFilesCount} file(s)` : 'No repo analyzed'}
-              </span>
-            </div>
+              )}
 
-            {/* Network Module */}
-            <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase">
-                    <Network size={14} />
-                    <span>Network & Web</span>
+              {/* Network Module (if Real) */}
+              {Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && !demoModules.includes('network') && (
+                <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase">
+                        <Network size={14} />
+                        <span>Network & Web</span>
+                      </div>
+                      <RiskBadge
+                        level={
+                          networkScan.ipResult
+                            ? networkScan.ipResult.riskLevel
+                            : networkScan.websiteResult
+                            ? networkScan.websiteResult.riskLevel
+                            : 'low'
+                        }
+                        size="sm"
+                      />
+                    </div>
+                    <h4 className="text-sm font-bold text-white mb-1">
+                      {networkScan.ipResult
+                        ? networkScan.ipResult.ip
+                        : networkScan.websiteResult
+                        ? networkScan.websiteResult.domain
+                        : 'Network Target'}
+                    </h4>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {networkScan.ipResult
+                        ? networkScan.ipResult.explanation
+                        : networkScan.websiteResult
+                        ? networkScan.websiteResult.explanation
+                        : 'Network target evaluated.'}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    {demoModules.includes('network') && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        Demo Data
-                      </span>
-                    )}
-                    <RiskBadge
-                      level={
-                        networkScan.ipResult
-                          ? networkScan.ipResult.riskLevel
-                          : networkScan.websiteResult
-                          ? networkScan.websiteResult.riskLevel
-                          : 'low'
-                      }
-                      size="sm"
-                    />
-                  </div>
+                  <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                    {networkScan.ipResult
+                      ? `IP Abuse Score: ${networkScan.ipResult.abuseScore}/100`
+                      : networkScan.websiteResult
+                      ? `Risk Score: ${networkScan.websiteResult.riskScore}/100`
+                      : 'Audited'}
+                  </span>
                 </div>
-                <h4 className="text-sm font-bold text-white mb-1">
-                  {networkScan.ipResult
-                    ? networkScan.ipResult.ip
-                    : networkScan.websiteResult
-                    ? networkScan.websiteResult.domain
-                    : 'Not Scanned Yet'}
-                </h4>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  {networkScan.ipResult
-                    ? networkScan.ipResult.explanation
-                    : networkScan.websiteResult
-                    ? networkScan.websiteResult.explanation
-                    : 'Module not executed during this session. Test an IP, link, or website.'}
-                </p>
-              </div>
-              <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                {networkScan.ipResult
-                  ? `IP Abuse Score: ${networkScan.ipResult.abuseScore}/100`
-                  : networkScan.websiteResult
-                  ? `Port Risk: ${networkScan.websiteResult.riskScore}/100`
-                  : 'No network checks'}
-              </span>
+              )}
+
+              {/* Show empty placeholder if no real modules */}
+              {(!telegramScan || demoModules.includes('telegram') || telegramScan.isDemo) &&
+               (!repoScan || demoModules.includes('repo') || repoScan.isDemo) &&
+               (!Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) || demoModules.includes('network')) && (
+                <div className="col-span-full p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
+                  <Info size={15} className="text-slate-500" />
+                  <span>No real modules scanned yet. Run a real scan to calculate an official overall threat score.</span>
+                </div>
+              )}
             </div>
           </div>
+
+          {/* Demo Data Modules Section (Separated) */}
+          {(demoModules.length > 0 || telegramScan?.isDemo || repoScan?.isDemo) && (
+            <div className="space-y-3 pt-2">
+              <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                <AlertTriangle size={14} className="text-amber-400" />
+                <span>Demo Data Modules (Excluded from Overall Score)</span>
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Telegram Demo */}
+                {(demoModules.includes('telegram') || telegramScan?.isDemo) && telegramScan && (
+                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase">
+                          <Send size={14} />
+                          <span>Telegram (Demo)</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          Demo Data
+                        </span>
+                      </div>
+                      <h4 className="text-sm font-bold text-white mb-1">{telegramScan.phone}</h4>
+                      <p className="text-xs text-slate-300 leading-relaxed">{telegramScan.summary}</p>
+                    </div>
+                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                      {telegramScan.sessions.length} session(s) audited, {telegramScan.findings.length} finding(s)
+                    </span>
+                  </div>
+                )}
+
+                {/* Repo Demo */}
+                {demoModules.includes('repo') && repoScan && (
+                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase">
+                          <GitBranch size={14} />
+                          <span>GitHub Code (Demo)</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          Demo Data
+                        </span>
+                      </div>
+                      <h4 className="text-sm font-bold text-white mb-1 truncate">{repoScan.repoName}</h4>
+                      <p className="text-xs text-slate-300 leading-relaxed">{repoScan.summary}</p>
+                    </div>
+                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                      {repoScan.counts.total} finding(s) in {repoScan.scannedFilesCount} file(s)
+                    </span>
+                  </div>
+                )}
+
+                {/* Network Demo */}
+                {demoModules.includes('network') && Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && (
+                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase">
+                          <Network size={14} />
+                          <span>Network & Web (Demo)</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          Demo Data
+                        </span>
+                      </div>
+                      <h4 className="text-sm font-bold text-white mb-1">
+                        {networkScan.ipResult
+                          ? networkScan.ipResult.ip
+                          : networkScan.websiteResult
+                          ? networkScan.websiteResult.domain
+                          : 'Network Target'}
+                      </h4>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        {networkScan.ipResult
+                          ? networkScan.ipResult.explanation
+                          : networkScan.websiteResult
+                          ? networkScan.websiteResult.explanation
+                          : 'Demo network check.'}
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
+                      {networkScan.ipResult ? `IP Abuse Threat: ${networkScan.ipResult.abuseScore}/100` : 'Demo Target'}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Section 2: Consolidated Network Findings */}
@@ -559,18 +674,18 @@ export const Report: React.FC = () => {
           )}
         </div>
 
-        {/* Section 3: How It Likely Happened */}
+        {/* Section 3: Possible explanations */}
         <div className="space-y-4">
           <div className="border-b border-slate-800 pb-2">
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center">3</span>
-              <span>How It Likely Happened (Plain English Story)</span>
+              <span>Possible explanations</span>
             </h3>
           </div>
 
           <div className="p-5 rounded-2xl bg-[#111A2E] border border-slate-800 space-y-3">
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Based on the digital fingerprints collected, here is the reconstructed timeline of how an intruder breached your perimeter or could exploit your accounts:
+              Based on the findings detected in your scans, here are possible explanations for how these security gaps or exposures could occur:
             </p>
 
             <div className="space-y-2.5 pt-1">

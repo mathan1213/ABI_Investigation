@@ -294,8 +294,8 @@ class ConnectedAccountItem(AppBaseModel):
 class GenerateReportResponse(AppBaseModel):
     id: str
     generated_at: str = Field(..., alias="generatedAt")
-    overall_score: int = Field(..., alias="overallScore", ge=0, le=100)
-    overall_risk: RiskLevel = Field(..., alias="overallRisk")
+    overall_score: Optional[int] = Field(default=None, alias="overallScore", ge=0, le=100)
+    overall_risk: Optional[RiskLevel] = Field(default=None, alias="overallRisk")
     summary: str
     how_it_happened: List[str] = Field(default_factory=list, alias="howItHappened")
     what_to_do_now: List[ActionPlanItem] = Field(default_factory=list, alias="whatToDoNow")

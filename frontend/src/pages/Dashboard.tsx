@@ -11,6 +11,7 @@ import {
   Clock,
   ExternalLink,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
 import { StatCard } from '../components/StatCard';
@@ -116,7 +117,7 @@ export const Dashboard: React.FC = () => {
   // Recharts Chart Data: Risk Score Over Recent Scans (Line)
   const lineData = recentScans.length > 0
     ? recentScans.slice(0, 5).reverse().map((s, idx) => ({ scan: `Scan ${idx + 1}`, score: s.score }))
-    : [{ scan: 'Initial', score: overallScore }];
+    : [{ scan: 'Initial', score: overallScore ?? 0 }];
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -164,15 +165,50 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Top Banner: Includes demo data / Based on real scans */}
+      {demoModules.length > 0 ? (
+        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
+            <span className="font-semibold">Includes demo data</span>
+            <span className="text-slate-300 hidden sm:inline">— Demo modules ({demoModules.join(', ')}) are excluded from the overall risk score.</span>
+          </div>
+          <span className="text-[11px] font-mono bg-amber-500/20 px-2 py-0.5 rounded text-amber-200">Demo Data Active</span>
+        </div>
+      ) : hasAnyScan ? (
+        <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
+            <span className="font-semibold">Based on real scans</span>
+            <span className="text-slate-300 hidden sm:inline">— All evaluated modules reflect real data and verified account credentials.</span>
+          </div>
+          <span className="text-[11px] font-mono bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-200">Verified Signals</span>
+        </div>
+      ) : null}
+
       {/* 4 Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Overall Threat Score"
-          value={hasAnyScan ? `${overallScore}%` : '0%'}
-          level={overallRisk}
+          value={overallScore !== null ? `${overallScore}%` : 'No real data'}
+          level={overallRisk ?? 'low'}
           icon={ShieldAlert}
-          subtitle={hasAnyScan ? 'Composite risk across scanned assets' : 'No scans completed yet'}
-          badgeLabel={!hasAnyScan ? 'No Scans' : demoModules.length > 0 ? 'Demo Active' : overallRisk === 'critical' ? 'Urgent Alert' : 'Active Status'}
+          subtitle={
+            overallScore !== null
+              ? 'Composite risk across real scanned assets'
+              : demoModules.length > 0
+              ? 'Not enough real data to calculate an overall score'
+              : 'No scans completed yet'
+          }
+          badgeLabel={
+            overallScore === null && demoModules.length > 0
+              ? 'Demo Only'
+              : !hasAnyScan
+              ? 'No Scans'
+              : overallRisk === 'critical'
+              ? 'Urgent Alert'
+              : 'Active Status'
+          }
         />
         <StatCard
           title="Telegram Risk"
@@ -206,20 +242,22 @@ export const Dashboard: React.FC = () => {
         <div className="glass-card rounded-2xl p-6 border border-slate-800 flex flex-col items-center justify-between">
           <div className="w-full flex items-center justify-between mb-2">
             <h3 className="text-base font-bold text-white">Overall Security Gauge</h3>
-            <RiskBadge level={overallRisk} size="sm" />
+            <RiskBadge level={overallRisk ?? 'low'} size="sm" />
           </div>
 
           <div className="my-4 py-2 flex flex-col items-center justify-center">
-            <RiskGauge score={overallScore} level={overallRisk} size="lg" />
+            <RiskGauge score={overallScore ?? 0} level={overallRisk ?? 'low'} size="lg" />
           </div>
 
           <div className="w-full bg-slate-900/80 rounded-xl p-3.5 border border-slate-800/80 text-xs text-slate-300">
             <p className="leading-relaxed text-center">
-              {overallScore >= 75
-                ? 'Action Required: We detected high-confidence evidence of an unauthorized login and public secret leaks.'
+              {overallScore === null
+                ? 'Not enough real data to calculate an overall score. Demo modules are excluded from the score.'
+                : overallScore >= 75
+                ? 'Action Required: High-confidence evidence of an unauthorized login or public secret leaks.'
                 : overallScore >= 50
-                ? 'Warning: Moderate vulnerabilities found. You should revoke unused sessions.'
-                : 'Your accounts are in good standing. No signs of intrusion found.'}
+                ? 'Warning: Moderate vulnerabilities found. You should review active sessions and endpoints.'
+                : 'Your real accounts are in good standing. No signs of intrusion found.'}
             </p>
           </div>
         </div>

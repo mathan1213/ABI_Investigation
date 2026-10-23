@@ -74,6 +74,7 @@ export interface RepoScanResult {
   timestamp: string;
   branch: string;
   scannedFilesCount: number;
+  isDemo?: boolean;
 }
 
 export interface IpCheckResult {
@@ -191,8 +192,8 @@ export interface ActionPlanItem {
 export interface FullReport {
   id: string;
   generatedAt: string;
-  overallScore: number;
-  overallRisk: RiskLevel;
+  overallScore: number | null;
+  overallRisk: RiskLevel | null;
   summary: string;
   telegram?: TelegramScanResult;
   repo?: RepoScanResult;
