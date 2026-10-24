@@ -5,7 +5,28 @@ import { useScan } from '../context/ScanContext';
 
 export const Navbar: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { overallScore, overallRisk, hasAnyScan } = useScan();
+  const { overallScore, overallRisk, hasAnyScan, demoModules, systemStatus } = useScan();
+
+  const isDemoMode = demoModules.length > 0;
+  const isSetupNeeded = Boolean(systemStatus && (!systemStatus.telegram || !systemStatus.gitInstalled));
+
+  const dataModeBadge = isDemoMode
+    ? {
+        label: 'Demo data',
+        colorClass: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+        dotClass: 'bg-amber-400',
+      }
+    : isSetupNeeded
+    ? {
+        label: 'Setup needed',
+        colorClass: 'bg-yellow-500/10 text-yellow-300 border-yellow-500/30',
+        dotClass: 'bg-yellow-400',
+      }
+    : {
+        label: 'Live data',
+        colorClass: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+        dotClass: 'bg-emerald-400 animate-pulse',
+      };
 
   const navLinks = [
     { to: '/', label: 'Dashboard', icon: BarChart3 },
@@ -56,9 +77,20 @@ export const Navbar: React.FC = () => {
               );
             })}
 
+            {/* Data Mode Indicator */}
+            <div className="ml-2 pl-3 border-l border-slate-800 flex items-center gap-2">
+              <span
+                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${dataModeBadge.colorClass}`}
+                title={`Current data mode: ${dataModeBadge.label}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+                <span>{dataModeBadge.label}</span>
+              </span>
+            </div>
+
             {/* Quick status pill */}
             {hasAnyScan && (
-              <div className="ml-3 pl-3 border-l border-slate-800 flex items-center gap-2">
+              <div className="flex items-center gap-2 pl-1">
                 <span className="text-[11px] text-slate-400">Risk Score:</span>
                 <span
                   className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
@@ -77,8 +109,14 @@ export const Navbar: React.FC = () => {
             )}
           </div>
 
-          {/* Mobile Menu Button */}
+          {/* Mobile Menu Button & Mode Badge */}
           <div className="flex items-center gap-2 md:hidden">
+            <span
+              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${dataModeBadge.colorClass}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+              <span>{dataModeBadge.label}</span>
+            </span>
             {hasAnyScan && (
               <span
                 className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${

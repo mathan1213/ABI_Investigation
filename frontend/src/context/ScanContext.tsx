@@ -10,6 +10,7 @@ import {
   RiskLevel,
   ToastNotification,
   FullReport,
+  SystemStatus,
 } from '../lib/types';
 import {
   analyzeTelegram,
@@ -18,6 +19,7 @@ import {
   checkLink,
   checkWebsite,
   getReport,
+  getSystemStatus,
 } from '../lib/api';
 
 interface ScanContextType {
@@ -32,6 +34,8 @@ interface ScanContextType {
   toasts: ToastNotification[];
   reportData: FullReport | null;
   isReportLoading: boolean;
+  systemStatus: SystemStatus | null;
+  refreshStatus: () => Promise<void>;
   refreshReport: () => Promise<void>;
   setTelegramScan: (scan: TelegramScanResult | null) => void;
   setRepoScan: (scan: RepoScanResult) => void;
@@ -46,110 +50,33 @@ interface ScanContextType {
 
 const ScanContext = createContext<ScanContextType | undefined>(undefined);
 
-const INITIAL_RECENT_SCANS: RecentScan[] = [
-  {
-    id: 'sc-1',
-    date: '10 mins ago',
-    type: 'Telegram',
-    target: '+1 (555) 019-2834',
-    riskLevel: 'critical',
-    score: 78,
-    status: 'Alert',
-  },
-  {
-    id: 'sc-2',
-    date: '2 hours ago',
-    type: 'Repository',
-    target: 'github.com/my-project/api-backend',
-    riskLevel: 'high',
-    score: 72,
-    status: 'Alert',
-  },
-  {
-    id: 'sc-3',
-    date: 'Yesterday',
-    type: 'Network IP',
-    target: '185.220.101.5 (Frankfurt)',
-    riskLevel: 'critical',
-    score: 89,
-    status: 'Alert',
-  },
-  {
-    id: 'sc-4',
-    date: '2 days ago',
-    type: 'Network Link',
-    target: 'https://security-verify-telegram.cc',
-    riskLevel: 'critical',
-    score: 86,
-    status: 'Alert',
-  },
-  {
-    id: 'sc-5',
-    date: '3 days ago',
-    type: 'Network Website',
-    target: 'my-service-portal.io',
-    riskLevel: 'medium',
-    score: 65,
-    status: 'Completed',
-  }
-];
-
 export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [telegramScan, setTelegramScanState] = useState<TelegramScanResult | null>(() => {
-    const saved = localStorage.getItem('abi_tg_scan');
-    return saved ? JSON.parse(saved) : null;
-  });
-
-  const [repoScan, setRepoScanState] = useState<RepoScanResult | null>(() => {
-    const saved = localStorage.getItem('abi_repo_scan');
-    return saved ? JSON.parse(saved) : null;
-  });
-
-  const [networkScan, setNetworkScanState] = useState<NetworkScanResult>(() => {
-    const saved = localStorage.getItem('abi_net_scan');
-    return saved ? JSON.parse(saved) : {};
-  });
-
-  const [demoModules, setDemoModules] = useState<string[]>(() => {
-    const saved = localStorage.getItem('abi_demo_modules');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [recentScans, setRecentScans] = useState<RecentScan[]>(() => {
-    const saved = localStorage.getItem('abi_recent_scans');
-    return saved ? JSON.parse(saved) : INITIAL_RECENT_SCANS;
-  });
+  // Scans are kept strictly in React memory across page navigation.
+  // No localStorage is used for scan results, phone numbers, or credentials.
+  const [telegramScan, setTelegramScanState] = useState<TelegramScanResult | null>(null);
+  const [repoScan, setRepoScanState] = useState<RepoScanResult | null>(null);
+  const [networkScan, setNetworkScanState] = useState<NetworkScanResult>({});
+  const [demoModules, setDemoModules] = useState<string[]>([]);
+  const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
 
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [reportData, setReportData] = useState<FullReport | null>(null);
   const [isReportLoading, setIsReportLoading] = useState<boolean>(false);
 
-  // Persist state to local storage safely
-  useEffect(() => {
-    if (telegramScan) {
-      localStorage.setItem('abi_tg_scan', JSON.stringify(telegramScan));
+  // Fetch backend configuration status on startup
+  const refreshStatus = async () => {
+    try {
+      const status = await getSystemStatus();
+      setSystemStatus(status);
+    } catch {
+      setSystemStatus(null);
     }
-  }, [telegramScan]);
+  };
 
   useEffect(() => {
-    if (repoScan) {
-      localStorage.setItem('abi_repo_scan', JSON.stringify(repoScan));
-    }
-  }, [repoScan]);
-
-  useEffect(() => {
-    if (Object.keys(networkScan).length > 0) {
-      localStorage.setItem('abi_net_scan', JSON.stringify(networkScan));
-    }
-  }, [networkScan]);
-
-  useEffect(() => {
-    localStorage.setItem('abi_recent_scans', JSON.stringify(recentScans));
-  }, [recentScans]);
-
-  useEffect(() => {
-    localStorage.setItem('abi_demo_modules', JSON.stringify(demoModules));
-  }, [demoModules]);
+    refreshStatus();
+  }, []);
 
   const addToast = (toast: Omit<ToastNotification, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -167,7 +94,6 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const setTelegramScan = (scan: TelegramScanResult | null) => {
     setTelegramScanState(scan);
     if (!scan) {
-      localStorage.removeItem('abi_tg_scan');
       setDemoModules((prev) => prev.filter((m) => m !== 'telegram'));
       return;
     }
@@ -277,15 +203,19 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setRepoScanState(null);
     setNetworkScanState({});
     setDemoModules([]);
+    setRecentScans([]);
     setReportData(null);
-    localStorage.removeItem('abi_tg_scan');
-    localStorage.removeItem('abi_repo_scan');
-    localStorage.removeItem('abi_net_scan');
-    localStorage.removeItem('abi_demo_modules');
+    try {
+      localStorage.removeItem('abi_tg_scan');
+      localStorage.removeItem('abi_repo_scan');
+      localStorage.removeItem('abi_net_scan');
+      localStorage.removeItem('abi_demo_modules');
+      localStorage.removeItem('abi_recent_scans');
+    } catch {}
     addToast({
       type: 'info',
       title: 'Session Scans Cleared',
-      message: 'All your temporary scan records have been deleted.',
+      message: 'All in-memory scan records have been deleted.',
     });
   };
 
@@ -598,6 +528,8 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toasts,
         reportData,
         isReportLoading,
+        systemStatus,
+        refreshStatus,
         refreshReport,
         setTelegramScan,
         setRepoScan,

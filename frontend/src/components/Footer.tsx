@@ -27,16 +27,14 @@ export const Footer: React.FC = () => {
 
           {/* Actions & session clear */}
           <div className="flex items-center gap-4">
-            {hasAnyScan && (
-              <button
-                onClick={clearAllScans}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
-                title="Wipe all temporary scan results"
-              >
-                <Trash2 size={13} />
-                <span>Clear Session Data</span>
-              </button>
-            )}
+            <button
+              onClick={clearAllScans}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
+              title="Wipe all in-memory scan results and state"
+            >
+              <Trash2 size={13} />
+              <span>Clear all data</span>
+            </button>
 
             <div className="text-slate-400 flex items-center gap-1">
               <span>Account Breach Investigation</span>

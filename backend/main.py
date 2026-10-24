@@ -6,6 +6,7 @@ from routers.network import router as network_router
 from routers.repo import router as repo_router
 from routers.telegram import router as telegram_router
 from routers.report import router as report_router
+from routers.status import router as status_router
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -29,6 +30,7 @@ app.include_router(network_router)
 app.include_router(repo_router)
 app.include_router(telegram_router)
 app.include_router(report_router)
+app.include_router(status_router)
 
 
 # ---------------------------------------------------------------------------

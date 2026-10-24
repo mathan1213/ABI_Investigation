@@ -177,7 +177,7 @@ export const Report: React.FC = () => {
           description="We need at least one completed scan to generate your breach investigation report. You can link your Telegram, check a public GitHub repository, or test a suspicious network address."
           actionText="Link Telegram to Start"
           actionLink="/telegram"
-          secondaryActionText="Load Sample Report Incident (Demo Data)"
+          secondaryActionText="Load demo data"
           onSecondaryAction={loadSampleData}
         />
       </div>

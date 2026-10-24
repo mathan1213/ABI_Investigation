@@ -494,20 +494,20 @@ async def analyze_telegram_account(flow_id: str) -> TelegramScanResult:
         # 10. Generate plain-English summary, howItHappened & action checklist
         if crit_count > 0 or high_count > 0:
             summary = (
-                f"High risk of unauthorized access: we detected {len(findings)} security finding(s), "
+                f"Elevated risk: we detected {len(findings)} security finding(s), "
                 f"including unfamiliar devices or foreign logins active on your Telegram account."
             )
             how_it_happened = (
-                "An intruder likely gained access by intercepting or tricking you into providing an SMS verification code, "
-                "or by compromising an older logged-in session. Because two-step verification was not protecting the account "
-                "or was bypassed, they established persistent access to your chats and media."
+                "An external party may have gained access if an SMS login code was shared or entered on an unverified link, "
+                "or if an older active session was compromised. Because secondary two-step password verification was not protecting "
+                "the account or was bypassed, persistent access could be established."
             )
         elif not has_password:
             summary = "Your account is active on authorized devices, but lacks secondary Two-Step password protection."
-            how_it_happened = "No active intruder was identified, but your profile remains vulnerable to SMS interception."
+            how_it_happened = "No active intruder was identified, but your account could be vulnerable if someone intercepts your SMS login code."
         else:
             summary = "Your Telegram account is safe. All active logins match your regular devices and two-step verification is active."
-            how_it_happened = "No breach detected. All connected sessions are verified and two-step verification is guarding your account."
+            how_it_happened = "No indicators of unauthorized access were found. All active sessions match your regular devices and two-step verification is enabled."
 
         action_checklist = [
             "Open Telegram Settings > Devices > Tap 'Terminate All Other Sessions' immediately to kick out unknown devices.",

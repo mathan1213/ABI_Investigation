@@ -6,10 +6,41 @@ import {
   WebsiteCheckResult,
   NetworkScanResult,
   FullReport,
+  SystemStatus,
 } from './types';
 
 // API Base URL constant connecting to the Python FastAPI backend
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+/**
+ * Fetches configuration and availability status of backend integrations and tools.
+ */
+export async function getSystemStatus(): Promise<SystemStatus> {
+  try {
+    const res = await fetch(`${API_BASE}/api/status`);
+    if (!res.ok) {
+      throw new Error('Failed to fetch system status');
+    }
+    const data = await res.json();
+    return {
+      telegram: Boolean(data.telegram),
+      githubToken: Boolean(data.githubToken ?? data.github_token),
+      abuseipdb: Boolean(data.abuseipdb),
+      virustotal: Boolean(data.virustotal),
+      gitInstalled: Boolean(data.gitInstalled ?? data.git_installed),
+      banditAvailable: Boolean(data.banditAvailable ?? data.bandit_available),
+    };
+  } catch {
+    return {
+      telegram: false,
+      githubToken: false,
+      abuseipdb: false,
+      virustotal: false,
+      gitInstalled: false,
+      banditAvailable: false,
+    };
+  }
+}
 
 // Helper delay simulating network latency (1.2 to 1.8 seconds)
 const wait = (ms = 1400) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -209,58 +240,42 @@ function getDemoTelegramResult(phone: string): TelegramScanResult {
 
 /**
  * Requests a one-time verification code from Telegram.
- * Falls back to demo mode if backend returns 503 (keys not configured).
+ * Calls real backend: POST /api/telegram/send-code
+ * Never silently substitutes mock data.
  */
 export async function sendTelegramCode(phone: string): Promise<SendTelegramCodeResult> {
+  const cleanPhone = phone.trim();
+  let res: Response;
   try {
-    const res = await fetch(`${API_BASE}/api/telegram/send-code`, {
+    res = await fetch(`${API_BASE}/api/telegram/send-code`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phone.trim() }),
+      body: JSON.stringify({ phone: cleanPhone }),
     });
-
-    if (res.status === 503) {
-      // Backend returned 503: keys not configured, run in demo mode
-      return {
-        flowId: `demo-flow-${Date.now()}`,
-        isDemo: true,
-        message: 'Demo Mode (Telegram API keys not configured on server)',
-      };
-    }
-
-    if (res.status === 429) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || 'Too many verification code requests. Please wait 10 minutes.');
-    }
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || 'Failed to request Telegram verification code.');
-    }
-
-    const data = await res.json();
-    return {
-      flowId: data.flowId,
-      message: data.message,
-      isDemo: false,
-    };
-  } catch (err: any) {
-    if (
-      err.message &&
-      (err.message.includes('Too many') ||
-        err.message.includes('Invalid phone') ||
-        err.message.includes('Telegram') ||
-        err.message.includes('recognized'))
-    ) {
-      throw err;
-    }
-    // Network failure / server offline: fallback to demo mode
-    return {
-      flowId: `demo-flow-${Date.now()}`,
-      isDemo: true,
-      message: 'Demo Mode (Telegram API keys not configured on server)',
-    };
+  } catch {
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}. Please ensure the backend is running (cd backend && .venv/bin/uvicorn main:app --reload).`);
   }
+
+  if (res.status === 503) {
+    throw new Error('Telegram integration is not configured on the server. Please add TELEGRAM_API_ID and TELEGRAM_API_HASH from https://my.telegram.org to backend/.env.');
+  }
+
+  if (res.status === 429) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Too many verification code requests. Please wait 10 minutes.');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Failed to request Telegram verification code. Please check the phone number.');
+  }
+
+  const data = await res.json();
+  return {
+    flowId: data.flowId,
+    message: data.message,
+    isDemo: false,
+  };
 }
 
 /**
@@ -273,8 +288,7 @@ export async function verifyTelegramCode(
   password?: string
 ): Promise<VerifyTelegramCodeResult> {
   if (flowId.startsWith('demo-flow-')) {
-    await wait(600);
-    // Demo behavior: if user enters code '2fa' and hasn't entered a password yet, simulate password prompt
+    await wait(400);
     if (code.trim() === '2fa' && !password) {
       return { status: 'needs_password', needsPassword: true, isDemo: true };
     }
@@ -293,7 +307,7 @@ export async function verifyTelegramCode(
       }),
     });
   } catch {
-    throw new Error('Cannot reach the analysis server. Is the backend running?');
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}. Is the backend running?`);
   }
 
   if (res.status === 401) {
@@ -323,24 +337,23 @@ export async function verifyTelegramCode(
 
 /**
  * Analyzes a Telegram account for suspicious logins, unexpected sessions, and security weaknesses.
- * Can be called with flowId (real/demo) or with legacy (phone, otp) for sample loads.
+ * Calls real backend: POST /api/telegram/analyze
+ * Never silently substitutes mock data.
  */
 export async function analyzeTelegram(
   flowIdOrPhone: string,
   legacyOtp?: string
 ): Promise<TelegramScanResult> {
-  // Support legacy sample calls from ScanContext: analyzeTelegram('+1555...', '12345')
-  if (legacyOtp !== undefined || flowIdOrPhone.startsWith('+')) {
-    await wait(1400);
+  if (flowIdOrPhone.startsWith('demo-flow-')) {
+    await wait(1200);
+    return getDemoTelegramResult('+1 (555) 019-2834');
+  }
+
+  if (flowIdOrPhone.startsWith('+') && legacyOtp === 'demo') {
     return getDemoTelegramResult(flowIdOrPhone);
   }
 
   const flowId = flowIdOrPhone;
-  if (flowId.startsWith('demo-flow-')) {
-    await wait(1800);
-    return getDemoTelegramResult('+1 (555) 019-2834');
-  }
-
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/telegram/analyze`, {
@@ -349,12 +362,11 @@ export async function analyzeTelegram(
       body: JSON.stringify({ flowId }),
     });
   } catch {
-    throw new Error('Cannot reach the analysis server. Is the backend running?');
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}. Is the backend running?`);
   }
 
   if (res.status === 503) {
-    // If backend is unconfigured, return realistic demo data
-    return getDemoTelegramResult('+1 (555) 019-2834');
+    throw new Error('Telegram integration is not configured on the server. Please add TELEGRAM_API_ID and TELEGRAM_API_HASH from https://my.telegram.org to backend/.env.');
   }
 
   return await handleResponse<TelegramScanResult>(res, 'Failed to complete Telegram security investigation');
@@ -466,83 +478,16 @@ export interface GenerateReportPayload {
 }
 
 /**
- * Fallback synthesizer if backend is unreachable.
- */
-function getFallbackReport(payload: GenerateReportPayload): FullReport {
-  const tg = payload.telegram;
-  const rp = payload.repo;
-  const net = payload.network;
-  const demoMods = payload.demoModules || [];
-
-  const scores: number[] = [];
-  if (tg) scores.push(tg.riskScore);
-  if (rp) scores.push(rp.riskScore);
-  if (net?.ipResult) scores.push(net.ipResult.abuseScore);
-  else if (net?.websiteResult) scores.push(net.websiteResult.riskScore);
-
-  let overallScore = 0;
-  if (scores.length > 0) {
-    const highest = Math.max(...scores);
-    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-    overallScore = Math.round(0.5 * highest + 0.5 * avg);
-  }
-
-  const overallRisk =
-    overallScore >= 75 ? 'critical' : overallScore >= 50 ? 'high' : overallScore >= 25 ? 'medium' : 'low';
-
-  return {
-    id: `REP-${Math.floor(100000 + Math.random() * 900000)}`,
-    generatedAt: new Date().toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    }),
-    overallScore,
-    overallRisk,
-    summary:
-      overallScore > 50
-        ? 'High likelihood of account unauthorized access: anomalous logins or leaked code credentials were detected.'
-        : 'Your digital assets look safe with no severe active compromise signals detected.',
-    howItHappened: [
-      'Step 1: Monitored sessions, repositories, and network perimeter records were synthesized.',
-      'Step 2: Threat heuristics evaluated IP geolocations, API key patterns, and port accessibility.',
-    ],
-    actionPlan: [
-      {
-        id: 1,
-        title: 'Review Telegram Active Sessions',
-        detail: "Open Telegram Settings > Devices > Tap 'Terminate all other sessions' if unfamiliar devices are present.",
-      },
-      {
-        id: 2,
-        title: 'Enable Two-Step Verification',
-        detail: 'Configure a secondary cloud password under Telegram Settings > Privacy and Security.',
-      },
-    ],
-    connectedAccounts: [
-      ...(tg ? [{ name: `Telegram (${tg.phone})`, service: 'Telegram MTProto', connectedAt: 'Recent', status: `${tg.riskLevel.toUpperCase()}` }] : []),
-      ...(rp ? [{ name: rp.repoName, service: 'GitHub Repo', connectedAt: 'Recent', status: `${rp.riskLevel.toUpperCase()}` }] : []),
-    ],
-    limitations: [
-      'Generated locally via fallback synthesis.',
-      ...(demoMods.length > 0 ? [`Demo mode active for: ${demoMods.join(', ')}`] : []),
-    ],
-    methodology: 'Computed as 50% highest individual module score plus 50% average across all scanned modules.',
-    demoModules: demoMods,
-  };
-}
-
-/**
  * Compiles a comprehensive full investigation report across all scanned channels.
  * Calls real backend: POST /api/report/generate
+ * Never silently substitutes mock data.
  */
 export async function getReport(payload?: GenerateReportPayload): Promise<FullReport> {
   const requestBody = payload || {};
 
+  let res: Response;
   try {
-    const res = await fetch(`${API_BASE}/api/report/generate`, {
+    res = await fetch(`${API_BASE}/api/report/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -552,31 +497,22 @@ export async function getReport(payload?: GenerateReportPayload): Promise<FullRe
         demoModules: requestBody.demoModules || [],
       }),
     });
-
-    if (res.status === 413) {
-      throw new Error('Report data exceeded the 1 MB size limit.');
-    }
-    if (res.status === 429) {
-      throw new Error('Too many report requests. Please wait a minute.');
-    }
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || 'Failed to generate investigation report on backend.');
-    }
-
-    const data: FullReport = await res.json();
-    return data;
-  } catch (err: any) {
-    if (
-      err.message &&
-      (err.message.includes('1 MB') ||
-        err.message.includes('Too many') ||
-        err.message.includes('backend.'))
-    ) {
-      throw err;
-    }
-    // Safe fallback so report never hangs if offline
-    return getFallbackReport(requestBody);
+  } catch {
+    throw new Error(`Cannot reach the report server at ${API_BASE}. Please ensure the backend is running (cd backend && .venv/bin/uvicorn main:app --reload).`);
   }
+
+  if (res.status === 413) {
+    throw new Error('Report data exceeded the 1 MB size limit.');
+  }
+  if (res.status === 429) {
+    throw new Error('Too many report requests. Please wait a minute.');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Failed to generate investigation report on backend.');
+  }
+
+  const data: FullReport = await res.json();
+  return data;
 }

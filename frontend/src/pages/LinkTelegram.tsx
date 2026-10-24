@@ -54,12 +54,12 @@ const ANALYZE_MESSAGES = [
 ];
 
 export const LinkTelegram: React.FC = () => {
-  const { telegramScan, setTelegramScan, addToast } = useScan();
+  const { telegramScan, setTelegramScan, addToast, systemStatus } = useScan();
 
   // If already scanned previously, default to Step 4, otherwise Step 1
   const [step, setStep] = useState<number>(telegramScan ? 4 : 1);
   const [agreedToConsent, setAgreedToConsent] = useState(false);
-  const [phone, setPhone] = useState('+1 (555) 019-2834');
+  const [phone, setPhone] = useState('');
   const [flowId, setFlowId] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [password, setPassword] = useState('');
@@ -97,11 +97,10 @@ export const LinkTelegram: React.FC = () => {
       setOtpSent(true);
 
       if (res.isDemo) {
-        setOtp('12345'); // Pre-fill realistic code in demo mode
         addToast({
           type: 'info',
           title: 'Demo Mode Active',
-          message: 'Backend Telegram keys are not configured. Running in simulated demo mode (code: 12345).',
+          message: 'Explicit demo mode active. Enter any 5-digit code or test code.',
         });
       } else {
         addToast({
@@ -349,6 +348,33 @@ export const LinkTelegram: React.FC = () => {
             </button>
           </div>
 
+          {/* Setup Warning if Telegram keys missing */}
+          {systemStatus && !systemStatus.telegram && (
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-bold text-amber-300">
+                <AlertTriangle size={16} className="shrink-0" />
+                <span>Telegram Integration Setup Needed</span>
+              </div>
+              <p className="text-slate-300 leading-relaxed">
+                To run live security forensics on your account, the backend needs your Telegram API credentials.
+                Get your free API ID and Hash from{' '}
+                <a
+                  href="https://my.telegram.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-400 hover:underline font-semibold"
+                >
+                  my.telegram.org
+                </a>
+                , then add them to <code className="bg-slate-900 px-1.5 py-0.5 rounded text-amber-300">backend/.env</code>:
+              </p>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[11px] text-slate-300">
+                TELEGRAM_API_ID=your_api_id<br />
+                TELEGRAM_API_HASH=your_api_hash
+              </div>
+            </div>
+          )}
+
           {/* Demo Mode Notice Banner */}
           {isDemo && (
             <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
@@ -393,7 +419,7 @@ export const LinkTelegram: React.FC = () => {
                         setNeedsPassword(false);
                       }
                     }}
-                    placeholder="+919876543210 or +14155552671"
+                    placeholder="e.g. +1 555 019 2834 or +91 98765 43210"
                     className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                   />
                 </div>
@@ -416,7 +442,7 @@ export const LinkTelegram: React.FC = () => {
                 </button>
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
-                Enter your number with international prefix (+1, +91, +44, etc.).
+                Enter your number with international prefix (e.g. +1, +91, +44).
               </p>
             </div>
 

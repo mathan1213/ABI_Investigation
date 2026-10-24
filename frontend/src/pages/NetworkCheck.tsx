@@ -90,13 +90,13 @@ function isPrivateOrLoopback(target: string): boolean {
 }
 
 export const NetworkCheck: React.FC = () => {
-  const { networkScan, setIpScan, setLinkScan, setWebsiteScan, addToast } = useScan();
+  const { networkScan, setIpScan, setLinkScan, setWebsiteScan, addToast, systemStatus } = useScan();
   const [activeTab, setActiveTab] = useState<'ip' | 'link' | 'website'>('ip');
 
-  // Form states
-  const [ipInput, setIpInput] = useState(networkScan.ipResult ? networkScan.ipResult.ip : '8.8.8.8');
-  const [linkInput, setLinkInput] = useState(networkScan.linkResult ? networkScan.linkResult.url : 'https://google.com');
-  const [websiteInput, setWebsiteInput] = useState(networkScan.websiteResult ? networkScan.websiteResult.domain : 'google.com');
+  // Form states - empty defaults in real data mode
+  const [ipInput, setIpInput] = useState(networkScan.ipResult ? networkScan.ipResult.ip : '');
+  const [linkInput, setLinkInput] = useState(networkScan.linkResult ? networkScan.linkResult.url : '');
+  const [websiteInput, setWebsiteInput] = useState(networkScan.websiteResult ? networkScan.websiteResult.domain : '');
 
   // Loading states
   const [isScanning, setIsScanning] = useState(false);
@@ -229,6 +229,26 @@ export const NetworkCheck: React.FC = () => {
         </p>
       </div>
 
+      {/* Optional Threat Intel Status Info */}
+      {systemStatus && (!systemStatus.abuseipdb || !systemStatus.virustotal) && (
+        <div className="max-w-2xl mx-auto p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles size={14} className="text-cyan-400 shrink-0" />
+            <span>
+              Threat Intelligence:{' '}
+              {!systemStatus.abuseipdb && !systemStatus.virustotal
+                ? 'Running on native heuristics & public registries.'
+                : !systemStatus.abuseipdb
+                ? 'AbuseIPDB unconfigured; using native IP heuristics.'
+                : 'VirusTotal unconfigured; using DNS & SSL analysis.'}
+            </span>
+          </div>
+          <span className="text-slate-500 font-medium shrink-0 hidden sm:inline">
+            Optional keys in backend/.env improve accuracy
+          </span>
+        </div>
+      )}
+
       {/* Tabs Selector */}
       <div className="flex justify-center">
         <div className="glass-card p-1.5 rounded-2xl border border-slate-800 flex gap-2 w-full max-w-md">
@@ -297,7 +317,7 @@ export const NetworkCheck: React.FC = () => {
                     type="text"
                     value={ipInput}
                     onChange={(e) => setIpInput(e.target.value)}
-                    placeholder="e.g. 185.220.101.5"
+                    placeholder="e.g. 8.8.8.8 or 1.1.1.1"
                     className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                   />
                 </div>
@@ -469,7 +489,7 @@ export const NetworkCheck: React.FC = () => {
                     type="url"
                     value={linkInput}
                     onChange={(e) => setLinkInput(e.target.value)}
-                    placeholder="https://suspicious-page.example/verify"
+                    placeholder="e.g. https://example.com/login"
                     className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                   />
                 </div>
@@ -643,7 +663,7 @@ export const NetworkCheck: React.FC = () => {
                     type="text"
                     value={websiteInput}
                     onChange={(e) => setWebsiteInput(e.target.value)}
-                    placeholder="e.g. portal.example.com"
+                    placeholder="e.g. example.com"
                     className="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
                   />
                 </div>

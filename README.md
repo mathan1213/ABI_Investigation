@@ -100,12 +100,15 @@ ABI_Investigation/
 │   │   ├── network.py            # /api/network/ip, /link, /website
 │   │   ├── repo.py               # /api/repo/scan
 │   │   ├── telegram.py           # /api/telegram/send-code, /verify, /analyze, /cancel
-│   │   └── report.py             # /api/report/generate
-│   ├── tests/                    # Comprehensive unit tests (68 tests passing)
+│   │   ├── report.py             # /api/report/generate
+│   │   └── status.py             # /api/status (system integrations check)
+│   ├── tests/                    # Comprehensive unit tests (78 tests passing)
 │   │   ├── test_network.py
 │   │   ├── test_repo.py
 │   │   ├── test_telegram.py
-│   │   └── test_report.py
+│   │   ├── test_report.py
+│   │   ├── test_status.py
+│   │   └── test_real_verification.py
 │   ├── requirements.txt          # Python dependencies
 │   └── .env.example              # Environment variables template
 ├── docs/
@@ -177,16 +180,28 @@ Open your browser at `http://localhost:5173`.
 
 ---
 
-## 🔑 How to Obtain External API Keys
+## 🌐 Real Data Mode & System Status
 
-The application works completely out of the box in **Demo / Heuristic Mode** even if no external keys are configured. For live threat intelligence and live MTProto logins, configure the following in `backend/.env`:
+The platform runs in **Real Data Mode** by default:
+- **Zero Mock Fallbacks**: Input forms (IPs, links, domains, repos, phone numbers) do not pre-fill dummy values or substitute mock results on errors. If an integration or backend is unavailable, plain-English setup instructions and error banners guide the user.
+- **In-Memory Client State**: Scan findings are held strictly in React memory (`ScanContext`) during active browser navigation. No scan results, phone numbers, or credentials are saved in `localStorage`.
+- **"Clear All Data"**: A dedicated button in the application footer resets all in-memory scan records immediately.
+- **"Load Demo Data"**: Available exclusively through the explicit top-level button, marking modules as demo and excluding demo scores from the overall score.
+- **Status Endpoint (`GET /api/status`)**: Checks integration readiness on startup (`telegram`, `gitInstalled`, `githubToken`, `abuseipdb`, `virustotal`, `banditAvailable`) and dynamically adjusts the Navbar Data Mode badge (`Live data`, `Setup needed`, or `Demo data`).
+
+---
+
+## 🔑 Environment Configuration & API Keys
+
+For full real forensics, configure the following in `backend/.env`:
 
 | Key Name | Provider | Free Tier URL | What It Enables |
 | :--- | :--- | :--- | :--- |
-| `TELEGRAM_API_ID` & `TELEGRAM_API_HASH` | Telegram | [my.telegram.org](https://my.telegram.org) | Enables real MTProto authentication and active session queries |
-| `ABUSEIPDB_KEY` | AbuseIPDB | [abuseipdb.com/register](https://www.abuseipdb.com/register) | Enables live crowd-sourced IP abuse scores (otherwise heuristic proxy scoring) |
-| `VIRUSTOTAL_KEY` | VirusTotal | [virustotal.com/gui/join-us](https://www.virustotal.com/gui/join-us) | Enables URL domain reputation checks |
-| `GITHUB_TOKEN` | GitHub | [github.com/settings/tokens](https://github.com/settings/tokens) | Increases GitHub API rate limits from 60 to 5,000 reqs/hr |
+| `TELEGRAM_API_ID` & `TELEGRAM_API_HASH` | Telegram | [my.telegram.org](https://my.telegram.org) | **Required for Telegram**: Enables real MTProto authentication and active session queries |
+| `ABUSEIPDB_KEY` | AbuseIPDB | [abuseipdb.com/register](https://www.abuseipdb.com/register) | *Optional, improves accuracy*: Live crowd-sourced IP abuse reports |
+| `VIRUSTOTAL_KEY` | VirusTotal | [virustotal.com/gui/join-us](https://www.virustotal.com/gui/join-us) | *Optional, improves accuracy*: Domain & link malware threat reputation |
+| `GITHUB_TOKEN` | GitHub | [github.com/settings/tokens](https://github.com/settings/tokens) | *Optional, improves rate limits*: Increases GitHub API rate limits from 60 to 5,000 reqs/hr |
+| `git` CLI | Git SCM | [git-scm.com](https://git-scm.com) | **Required for Repo Check**: Clones public Git repositories |
 
 ---
 

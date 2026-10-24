@@ -221,3 +221,16 @@ export interface ToastNotification {
   title: string;
   message?: string;
 }
+
+export interface SystemStatus {
+  telegram: boolean;
+  githubToken: boolean;
+  github_token?: boolean;
+  abuseipdb: boolean;
+  virustotal: boolean;
+  gitInstalled: boolean;
+  git_installed?: boolean;
+  banditAvailable: boolean;
+  bandit_available?: boolean;
+}
+

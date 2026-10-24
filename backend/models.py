@@ -312,8 +312,17 @@ class GenerateReportResponse(AppBaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 7. Health Check Model
+# 7. System Health & Configuration Status Models
 # ---------------------------------------------------------------------------
+
+class SystemStatusResponse(AppBaseModel):
+    telegram: bool = Field(..., description="Whether Telegram API credentials are configured")
+    github_token: bool = Field(..., alias="githubToken", description="Whether optional GitHub token is configured")
+    abuseipdb: bool = Field(..., description="Whether optional AbuseIPDB API key is configured")
+    virustotal: bool = Field(..., description="Whether optional VirusTotal API key is configured")
+    git_installed: bool = Field(..., alias="gitInstalled", description="Whether Git CLI is installed and available")
+    bandit_available: bool = Field(..., alias="banditAvailable", description="Whether Bandit SAST analyzer is available")
+
 
 class HealthResponse(AppBaseModel):
     status: str = "ok"
