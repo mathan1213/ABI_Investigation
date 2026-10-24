@@ -57,23 +57,44 @@ export const RepoCheck: React.FC = () => {
   const normalizeRepoInput = (input: string): string => {
     let clean = input.trim();
     if (!clean) return '';
+
+    // Handle SSH clone format git@github.com:owner/repo
     if (clean.startsWith('git@github.com:')) {
       clean = 'https://github.com/' + clean.slice('git@github.com:'.length);
-    } else if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+    }
+
+    // Upgrade http:// to https://
+    if (clean.startsWith('http://')) {
+      clean = 'https://' + clean.slice('http://'.length);
+    }
+
+    // Handle missing protocol
+    if (!clean.startsWith('https://')) {
       if (clean.startsWith('github.com/')) {
         clean = 'https://' + clean;
-      } else if (clean.split('/').length === 2) {
+      } else if (clean.split('/').length === 2 && !clean.includes(':')) {
         clean = 'https://github.com/' + clean;
       } else {
         clean = 'https://' + clean;
       }
     }
+
+    // Extract owner and repo from any GitHub URL (handling subpaths like /tree/main, /blob/..., etc.)
+    const ghMatch = clean.match(/^https?:\/\/(?:www\.)?github\.com\/([a-zA-Z0-9_\-\.]+)\/([a-zA-Z0-9_\-\.]+)/i);
+    if (ghMatch) {
+      let repo = ghMatch[2];
+      if (repo.endsWith('.git')) {
+        repo = repo.slice(0, -4);
+      }
+      return `https://github.com/${ghMatch[1]}/${repo}`;
+    }
+
     return clean;
   };
 
   const validateUrl = (url: string) => {
     const norm = normalizeRepoInput(url);
-    return /^(?:https?:\/\/)?(?:www\.)?github\.com\/[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.]+/i.test(norm);
+    return /^https:\/\/github\.com\/[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.]+$/i.test(norm);
   };
 
   const handleScan = async (targetUrl = repoUrl) => {
