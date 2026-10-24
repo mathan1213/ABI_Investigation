@@ -20,6 +20,7 @@ import {
   Compass,
   Link2,
   Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import { Stepper, StepItem } from '../components/Stepper';
 import { Analyzing } from '../components/Analyzing';
@@ -54,7 +55,7 @@ const ANALYZE_MESSAGES = [
 ];
 
 export const LinkTelegram: React.FC = () => {
-  const { telegramScan, setTelegramScan, addToast, systemStatus } = useScan();
+  const { telegramScan, setTelegramScan, addToast, systemStatus, refreshStatus } = useScan();
 
   // If already scanned previously, default to Step 4, otherwise Step 1
   const [step, setStep] = useState<number>(telegramScan ? 4 : 1);
@@ -348,29 +349,87 @@ export const LinkTelegram: React.FC = () => {
             </button>
           </div>
 
-          {/* Setup Warning if Telegram keys missing */}
+          {/* 3 Simple Steps Setup Guide if Telegram keys missing */}
           {systemStatus && !systemStatus.telegram && (
-            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-2">
-              <div className="flex items-center gap-2 font-bold text-amber-300">
-                <AlertTriangle size={16} className="shrink-0" />
-                <span>Telegram Integration Setup Needed</span>
-              </div>
-              <p className="text-slate-300 leading-relaxed">
-                To run live security forensics on your account, the backend needs your Telegram API credentials.
-                Get your free API ID and Hash from{' '}
-                <a
-                  href="https://my.telegram.org"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-cyan-400 hover:underline font-semibold"
+            <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
+                <div className="flex items-center gap-2 font-bold text-sm text-amber-300">
+                  <AlertTriangle size={18} className="shrink-0 text-amber-400" />
+                  <span>How to Connect Your Telegram Account (3 Simple Steps)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await refreshStatus();
+                    addToast({
+                      type: 'info',
+                      title: 'Configuration Checked',
+                      message: 'Checked backend status.',
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-semibold flex items-center gap-1.5 transition-colors self-start sm:self-auto shrink-0"
+                  title="Check if keys in backend/.env are recognized"
                 >
-                  my.telegram.org
-                </a>
-                , then add them to <code className="bg-slate-900 px-1.5 py-0.5 rounded text-amber-300">backend/.env</code>:
-              </p>
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[11px] text-slate-300">
-                TELEGRAM_API_ID=your_api_id<br />
-                TELEGRAM_API_HASH=your_api_hash
+                  <RotateCcw size={12} />
+                  <span>Re-check Configuration</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                {/* Step 1 */}
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">1</span>
+                    <span>Get Free Telegram Keys</span>
+                  </div>
+                  <p className="text-slate-300 text-[11px] leading-relaxed">
+                    Open{' '}
+                    <a
+                      href="https://my.telegram.org"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:underline font-semibold inline-flex items-center gap-0.5"
+                    >
+                      my.telegram.org <ExternalLink size={11} />
+                    </a>{' '}
+                    and log in with your phone number.
+                  </p>
+                  <p className="text-slate-400 text-[10px] leading-relaxed">
+                    Click <strong>API development tools</strong>. Enter any App title (e.g. <code>ABI Security</code>), Short name, select <strong>Desktop</strong>, and submit to view your <code>api_id</code> and <code>api_hash</code>.
+                  </p>
+                </div>
+
+                {/* Step 2 */}
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">2</span>
+                    <span>Add to backend/.env</span>
+                  </div>
+                  <p className="text-slate-300 text-[11px] leading-relaxed">
+                    Open <code className="bg-slate-950 px-1 py-0.5 rounded text-amber-300">backend/.env</code> in your project and paste your keys:
+                  </p>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px] text-amber-300 select-all leading-tight">
+                    TELEGRAM_API_ID=your_id_numbers<br />
+                    TELEGRAM_API_HASH=your_hash_string
+                  </div>
+                  <p className="text-slate-400 text-[10px]">
+                    Save the file. (The backend auto-reloads changes automatically.)
+                  </p>
+                </div>
+
+                {/* Step 3 */}
+                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">3</span>
+                    <span>Request Login Code</span>
+                  </div>
+                  <p className="text-slate-300 text-[11px] leading-relaxed">
+                    Enter your phone number below with international format (e.g. <code>+916379617482</code>) and click <strong>Send Code</strong>.
+                  </p>
+                  <p className="text-emerald-400 text-[10px] font-medium leading-relaxed">
+                    ✓ Telegram sends a code directly to your official app. Enter it to audit foreign devices. Inspection session is logged out immediately when done!
+                  </p>
+                </div>
               </div>
             </div>
           )}
