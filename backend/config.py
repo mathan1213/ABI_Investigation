@@ -1,5 +1,6 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -27,6 +28,20 @@ class Settings(BaseSettings):
     # Telegram MTProto API credentials (https://my.telegram.org)
     TELEGRAM_API_ID: Optional[int] = None
     TELEGRAM_API_HASH: Optional[str] = None
+
+    @field_validator("TELEGRAM_API_ID", mode="before")
+    @classmethod
+    def parse_telegram_api_id(cls, v):
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        return int(v)
+
+    @field_validator("ABUSEIPDB_KEY", "VIRUSTOTAL_KEY", "GITHUB_TOKEN", "TELEGRAM_API_HASH", mode="before")
+    @classmethod
+    def parse_empty_strings(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     # Safety limits
     REQUEST_TIMEOUT_SECONDS: float = 5.0

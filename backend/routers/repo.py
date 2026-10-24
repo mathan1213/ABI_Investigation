@@ -50,4 +50,5 @@ async def scan_repo_endpoint(payload: RepoScanRequest, request: Request) -> Repo
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to scan repository: {str(e)}")
+        err_msg = str(e).strip() or type(e).__name__
+        raise HTTPException(status_code=500, detail=f"Failed to scan repository: {err_msg}")

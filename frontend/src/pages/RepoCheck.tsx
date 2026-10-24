@@ -54,21 +54,44 @@ export const RepoCheck: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'all' | RepoFindingCategory>('all');
 
+  const normalizeRepoInput = (input: string): string => {
+    let clean = input.trim();
+    if (!clean) return '';
+    if (clean.startsWith('git@github.com:')) {
+      clean = 'https://github.com/' + clean.slice('git@github.com:'.length);
+    } else if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      if (clean.startsWith('github.com/')) {
+        clean = 'https://' + clean;
+      } else if (clean.split('/').length === 2) {
+        clean = 'https://github.com/' + clean;
+      } else {
+        clean = 'https://' + clean;
+      }
+    }
+    return clean;
+  };
+
   const validateUrl = (url: string) => {
-    return /^https:\/\/github\.com\/[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.]+/.test(url.trim());
+    const norm = normalizeRepoInput(url);
+    return /^(?:https?:\/\/)?(?:www\.)?github\.com\/[a-zA-Z0-9_\-\.]+\/[a-zA-Z0-9_\-\.]+/i.test(norm);
   };
 
   const handleScan = async (targetUrl = repoUrl) => {
-    const trimmed = targetUrl.trim();
-    if (!validateUrl(trimmed)) {
-      setErrorMsg('Please enter a valid GitHub repository URL (e.g. https://github.com/owner/repository).');
+    const raw = targetUrl.trim();
+    if (!raw) {
+      setErrorMsg('Please enter a GitHub repository URL (e.g. https://github.com/owner/repository).');
+      return;
+    }
+    const normalized = normalizeRepoInput(raw);
+    if (!validateUrl(raw)) {
+      setErrorMsg('Please enter a valid GitHub repository URL or owner/repo path (e.g. owner/project or https://github.com/owner/project).');
       return;
     }
     setErrorMsg(null);
     setIsScanning(true);
 
     try {
-      const result: RepoScanResult = await scanRepo(trimmed);
+      const result: RepoScanResult = await scanRepo(normalized);
       setRepoScan(result);
     } catch (err: any) {
       const msg = err?.message || 'Failed to inspect repository. Please confirm the repository is public.';

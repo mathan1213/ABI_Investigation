@@ -25,6 +25,21 @@ GITHUB_URL_REGEX = re.compile(
     re.IGNORECASE
 )
 
+
+def parse_github_repo(raw_url: str) -> Tuple[str, str, str]:
+    """
+    Parses and validates a GitHub repository URL into (owner, repo, normalized_url).
+    """
+    clean = raw_url.strip()
+    match = GITHUB_URL_REGEX.match(clean)
+    if not match:
+        raise ValueError(
+            "Invalid GitHub repository URL. Must be in the format 'https://github.com/owner/repository'."
+        )
+    owner, repo_name = match.group(1), match.group(2)
+    normalized_url = f"https://github.com/{owner}/{repo_name}"
+    return owner, repo_name, normalized_url
+
 # Secret detection patterns with corresponding severity
 SECRET_PATTERNS = [
     (
@@ -158,9 +173,10 @@ def is_binary_file(filepath: str) -> bool:
 # GitHub Repository Lookup & Validation
 # ---------------------------------------------------------------------------
 
-async def fetch_github_metadata(owner: str, repo: str) -> Dict[str, Any]:
+async def fetch_github_metadata(owner: str, repo: str) -> Optional[Dict[str, Any]]:
     """
     Queries GitHub REST API to verify repository exists, is public, and within size limits.
+    Returns metadata dict, or None if API is unreachable or rate-limited (allowing direct git clone fallback).
     """
     api_url = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {
@@ -173,27 +189,26 @@ async def fetch_github_metadata(owner: str, repo: str) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS * 2) as client:
         try:
             resp = await client.get(api_url, headers=headers)
-        except Exception as e:
-            raise ValueError(f"Could not connect to GitHub API: {str(e)}")
+        except Exception:
+            # Network issue connecting to api.github.com - proceed with direct git clone
+            return None
 
         if resp.status_code == 404:
             raise ValueError(
                 f"Repository '{owner}/{repo}' not found on GitHub. "
                 "Please verify the owner and repo name, and ensure the repository is public."
             )
-        if resp.status_code == 403:
-            msg = resp.json().get("message", "API rate limit reached")
-            raise ValueError(f"GitHub API restriction: {msg}")
+        if resp.status_code in (403, 429):
+            # API rate limit reached on public IP - allow direct git clone to proceed
+            return None
         if resp.status_code != 200:
-            raise ValueError(f"GitHub API returned error status {resp.status_code}.")
+            return None
 
         data = resp.json()
         if data.get("private", False):
             raise ValueError("Repository is private. Only public repositories can be scanned.")
 
         size_kb = data.get("size", 0)
-        if size_kb == 0:
-            raise ValueError("Repository appears to be completely empty.")
         if size_kb > settings.REPO_MAX_SIZE_KB:
             raise ValueError(
                 f"Repository size ({size_kb // 1024} MB) exceeds the {settings.REPO_MAX_SIZE_KB // 1024} MB limit."
@@ -206,21 +221,21 @@ async def fetch_github_metadata(owner: str, repo: str) -> Dict[str, Any]:
 # Shallow Clone
 # ---------------------------------------------------------------------------
 
-async def clone_repository(repo_url: str, branch: str, target_dir: str) -> None:
+async def clone_repository(repo_url: str, branch: Optional[str], target_dir: str) -> str:
     """
     Performs a safe, shallow clone without git hooks or submodules.
+    Returns the detected active branch name.
     """
-    cmd = [
+    base_cmd = [
         "git",
         "clone",
         "--depth", "1",
         "--single-branch",
-        "--branch", branch,
         "--no-tags",
         "-c", "core.hooksPath=",
-        repo_url,
-        target_dir
     ]
+
+    cmd = base_cmd + (["--branch", branch] if branch else []) + [repo_url, target_dir]
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -240,11 +255,59 @@ async def clone_repository(repo_url: str, branch: str, target_dir: str) -> None:
                 pass
             raise ValueError("Git clone operation timed out after 60 seconds.")
 
+        # If branch-specific clone failed (e.g. branch doesn't exist), retry without --branch to clone default HEAD
+        if proc.returncode != 0 and branch:
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir, onerror=remove_readonly)
+
+            cmd_fallback = base_cmd + [repo_url, target_dir]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_fallback,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=settings.REPO_CLONE_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                raise ValueError("Git clone operation timed out after 60 seconds.")
+
         if proc.returncode != 0:
             err_text = stderr.decode(errors="replace").strip()
+            if "Repository not found" in err_text or "not found" in err_text.lower():
+                raise ValueError(
+                    "Repository not found on GitHub. Please verify the repository name and make sure it is public."
+                )
+            if "Authentication failed" in err_text or "could not read Username" in err_text:
+                raise ValueError("Repository is private or requires authentication. Only public repositories can be scanned.")
             raise ValueError(f"Git clone failed: {err_text or 'Unknown git error'}")
+
     except FileNotFoundError:
         raise ValueError("Git command not found on server system.")
+
+    # Detect the actual checked out branch
+    actual_branch = branch or "main"
+    try:
+        rev_proc = await asyncio.create_subprocess_exec(
+            "git", "-C", target_dir, "rev-parse", "--abbrev-ref", "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        rev_out, _ = await rev_proc.communicate()
+        if rev_proc.returncode == 0:
+            detected = rev_out.decode().strip()
+            if detected and detected != "HEAD":
+                actual_branch = detected
+    except Exception:
+        pass
+
+    return actual_branch
 
 
 # ---------------------------------------------------------------------------
@@ -621,20 +684,16 @@ async def inspect_repository(raw_url: str) -> RepoScanResponse:
     6. Mask all secrets and calculate risk score
     7. Always clean up temporary directory in a finally block
     """
-    # 1. URL validation
-    match = GITHUB_URL_REGEX.match(raw_url.strip())
-    if not match:
-        raise ValueError(
-            "Invalid GitHub repository URL. Must be in the format 'https://github.com/owner/repository'."
-        )
+    # 1. URL validation & normalization
+    owner, repo_name, normalized_url = parse_github_repo(raw_url)
+    full_repo_name = f"{owner}/{repo_name}"
+    default_branch = "main"
 
-    owner, repo_name = match.group(1), match.group(2)
-    normalized_url = f"https://github.com/{owner}/{repo_name}"
-
-    # 2. Metadata lookup
+    # 2. Metadata lookup (gracefully falls back if GitHub API is rate-limited or unreachable)
     meta = await fetch_github_metadata(owner, repo_name)
-    default_branch = meta.get("default_branch", "main")
-    full_repo_name = meta.get("full_name", f"{owner}/{repo_name}")
+    if meta:
+        default_branch = meta.get("default_branch", "main")
+        full_repo_name = meta.get("full_name", full_repo_name)
 
     # 3. Create temp directory
     temp_dir = tempfile.mkdtemp(prefix="repo_audit_")
@@ -646,8 +705,9 @@ async def inspect_repository(raw_url: str) -> RepoScanResponse:
     timed_out = False
 
     try:
-        # Clone repository
-        await clone_repository(normalized_url, default_branch, clone_dir)
+        # Clone repository safely & resolve branch
+        actual_branch = await clone_repository(normalized_url, default_branch, clone_dir)
+        default_branch = actual_branch or default_branch or "main"
 
         # 4. Walk files with limits
         files_to_scan: List[str] = []
