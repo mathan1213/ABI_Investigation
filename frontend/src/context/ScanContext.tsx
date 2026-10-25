@@ -10,16 +10,13 @@ import {
   RiskLevel,
   ToastNotification,
   FullReport,
-  SystemStatus,
 } from '../lib/types';
 import {
-  analyzeTelegram,
   scanRepo,
   checkIp,
   checkLink,
   checkWebsite,
   getReport,
-  getSystemStatus,
 } from '../lib/api';
 
 interface ScanContextType {
@@ -34,8 +31,6 @@ interface ScanContextType {
   toasts: ToastNotification[];
   reportData: FullReport | null;
   isReportLoading: boolean;
-  systemStatus: SystemStatus | null;
-  refreshStatus: () => Promise<void>;
   refreshReport: () => Promise<void>;
   setTelegramScan: (scan: TelegramScanResult | null) => void;
   setRepoScan: (scan: RepoScanResult) => void;
@@ -58,25 +53,10 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [networkScan, setNetworkScanState] = useState<NetworkScanResult>({});
   const [demoModules, setDemoModules] = useState<string[]>([]);
   const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-
-  const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [reportData, setReportData] = useState<FullReport | null>(null);
   const [isReportLoading, setIsReportLoading] = useState<boolean>(false);
 
-  // Fetch backend configuration status on startup
-  const refreshStatus = async () => {
-    try {
-      const status = await getSystemStatus();
-      setSystemStatus(status);
-    } catch {
-      setSystemStatus(null);
-    }
-  };
-
-  useEffect(() => {
-    refreshStatus();
-  }, []);
+  const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
   const addToast = (toast: Omit<ToastNotification, 'id'>) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -528,8 +508,6 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toasts,
         reportData,
         isReportLoading,
-        systemStatus,
-        refreshStatus,
         refreshReport,
         setTelegramScan,
         setRepoScan,

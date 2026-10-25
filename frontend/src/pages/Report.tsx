@@ -25,7 +25,7 @@ import { RiskGauge } from '../components/RiskGauge';
 import { RiskBadge } from '../components/RiskBadge';
 import { EmptyState } from '../components/EmptyState';
 import { FullReport, RiskLevel, NetworkFindingItem, ActionPlanItem } from '../lib/types';
-import { getReport } from '../lib/api';
+import { getReport, logPdfDownload } from '../lib/api';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import {
@@ -134,6 +134,8 @@ export const Report: React.FC = () => {
 
       const dateStr = new Date().toISOString().slice(0, 10);
       pdf.save(`Account-Breach-Report-${dateStr}.pdf`);
+
+      await logPdfDownload();
 
       addToast({
         type: 'success',
@@ -397,12 +399,17 @@ export const Report: React.FC = () => {
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase">
                         <Send size={14} />
-                        <span>Telegram</span>
+                        <span>Telegram (based on uploaded logs)</span>
                       </div>
                       <RiskBadge level={telegramScan.riskLevel} size="sm" />
                     </div>
-                    <h4 className="text-sm font-bold text-white mb-1">{telegramScan.phone}</h4>
+                    <h4 className="text-sm font-bold text-white mb-1">{telegramScan.accountName || 'Telegram User'}</h4>
                     <p className="text-xs text-slate-300 leading-relaxed">{telegramScan.summary}</p>
+                    {telegramScan.dataCoverage && (
+                      <p className="text-[11px] text-slate-400 mt-1 italic">
+                        {telegramScan.dataCoverage}
+                      </p>
+                    )}
                   </div>
                   <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
                     {telegramScan.sessions.length} session(s) audited, {telegramScan.findings.length} finding(s)
@@ -744,10 +751,10 @@ export const Report: React.FC = () => {
         <div className="pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left text-xs text-slate-400">
           <div className="flex items-center gap-2">
             <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
-            <span>Zero Data Stored • Verified Stateless Risk Engine</span>
+            <span>Summary Stored Securely • Uploaded Files Processed in Memory</span>
           </div>
           <p className="text-[11px] text-slate-400 max-w-xl text-center sm:text-right">
-            This report is a risk estimate based on automated security signals, not legal or definitive proof of a breach.
+            Results are estimates from a snapshot export, which cannot show two-step verification and cannot prove who logged in.
           </p>
         </div>
       </div>

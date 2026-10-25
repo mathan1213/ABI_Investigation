@@ -2,24 +2,24 @@ import json
 import time
 from collections import defaultdict
 from typing import Dict, List
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
 from config import settings
+from database import get_db
+import db_models
 from models import GenerateReportRequest, GenerateReportResponse
+from modules.auth_module import get_current_user, log_activity
 from modules.risk_engine import generate_comprehensive_report
 
 router = APIRouter(prefix="/api/report", tags=["Risk Engine & Reports"])
 
-# ---------------------------------------------------------------------------
 # In-Memory Rate Limiter (20 requests per minute per client IP)
-# ---------------------------------------------------------------------------
 _report_rate_limit_records: Dict[str, List[float]] = defaultdict(list)
-
 
 def reset_rate_limits():
     """Clears rate limit records during unit testing."""
     _report_rate_limit_records.clear()
-
 
 def enforce_report_rate_limit(request: Request):
     client_ip = request.client.host if request.client else "unknown"
@@ -38,20 +38,20 @@ def enforce_report_rate_limit(request: Request):
     _report_rate_limit_records[client_ip].append(now)
 
 
-# ---------------------------------------------------------------------------
-# Report Generation Endpoint (Stateless, 1 MB Body Cap)
-# ---------------------------------------------------------------------------
-
 @router.post(
     "/generate",
     response_model=GenerateReportResponse,
     summary="Generate Comprehensive Security Incident Dossier",
 )
-async def generate_report_endpoint(request: Request) -> GenerateReportResponse:
+async def generate_report_endpoint(
+    request: Request,
+    current_user: db_models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> GenerateReportResponse:
     """
-    Stateless risk synthesis engine that aggregates Telegram, Repository, and Network
-    investigation results into an executive incident dossier with composite scoring and action plan.
-    Enforces a strict 1 MB payload limit and logs zero user credentials.
+    Stateless risk synthesis engine that aggregates Telegram (based on uploaded logs),
+    Repository, and Network investigation results into an executive incident dossier.
+    Requires user authentication and persists the generated report summary for the user.
     """
     enforce_report_rate_limit(request)
 
@@ -75,6 +75,36 @@ async def generate_report_endpoint(request: Request) -> GenerateReportResponse:
 
     # 3. Generate Report via Pure In-Memory Risk Engine
     try:
-        return generate_comprehensive_report(payload)
+        report = generate_comprehensive_report(payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate investigation report: {str(e)}")
+
+    # 4. Save report in database
+    report_record = db_models.Report(
+        user_id=current_user.id,
+        overall_score=report.overall_score or 0,
+        overall_risk=report.overall_risk or "low",
+        report_json=report.model_dump_json()
+    )
+    db.add(report_record)
+    db.commit()
+
+    # 5. Log activity
+    log_activity(
+        db,
+        action="generate_report",
+        user_id=current_user.id,
+        detail=f"Generated report {report.id} (Score: {report.overall_score}, Risk: {report.overall_risk})"
+    )
+
+    return report
+
+
+@router.post("/log-download", summary="Log PDF Download Event")
+def log_download_pdf(
+    current_user: db_models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Logs the download_pdf event when user downloads dossier PDF."""
+    log_activity(db, "download_pdf", user_id=current_user.id, detail="Downloaded PDF investigation dossier")
+    return {"success": True}

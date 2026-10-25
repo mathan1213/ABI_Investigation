@@ -1,27 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { QRCodeSVG } from 'qrcode.react';
 import {
-  Send,
-  ShieldCheck,
-  Lock,
-  Eye,
-  CheckCircle,
+  DownloadCloud,
+  Upload,
+  FileText,
+  Trash2,
   AlertTriangle,
   ArrowRight,
-  RotateCcw,
-  Smartphone,
-  KeyRound,
-  FileText,
-  HelpCircle,
+  ShieldCheck,
+  CheckCircle2,
+  FileCheck,
   Laptop,
-  Compass,
-  Loader2,
+  MessageSquare,
+  Shield,
+  RotateCcw,
   ExternalLink,
-  QrCode,
-  Globe,
-  Footprints,
-  Link2,
+  Info,
+  Check,
+  Sparkles,
 } from 'lucide-react';
 import { Stepper, StepItem } from '../components/Stepper';
 import { Analyzing } from '../components/Analyzing';
@@ -29,1081 +25,541 @@ import { RiskGauge } from '../components/RiskGauge';
 import { RiskBadge } from '../components/RiskBadge';
 import { SessionTable } from '../components/SessionTable';
 import { useScan } from '../context/ScanContext';
-import {
-  sendTelegramCode,
-  resendTelegramCode,
-  startTelegramQr,
-  getTelegramQrStatus,
-  verifyTelegramCode,
-  analyzeTelegram,
-  cancelTelegram,
-} from '../lib/api';
-import { TelegramScanResult, TelegramFindingType } from '../lib/types';
-import {
-  COUNTRIES,
-  splitAndCleanPhoneNumber,
-  validateNationalPhone,
-  maskE164Phone,
-} from '../lib/phoneUtils';
+import { analyzeTelegramLogs } from '../lib/api';
+import { TelegramScanResult } from '../lib/types';
 
 const STEPS: StepItem[] = [
-  { id: 1, title: 'Consent', description: 'Read-only safety guarantee' },
-  { id: 2, title: 'Connect', description: 'Phone & verification code' },
-  { id: 3, title: 'Analyze', description: 'Deep security inspection' },
-  { id: 4, title: 'Result', description: 'Breach verdict & fixes' },
+  { id: 1, title: 'Export Logs', description: 'Export from Telegram Desktop' },
+  { id: 2, title: 'Upload', description: 'Upload sessions & chat files' },
+  { id: 3, title: 'Analyze', description: 'In-memory forensic audit' },
+  { id: 4, title: 'Result', description: 'Breach verdict & action plan' },
 ];
 
 const ANALYZE_MESSAGES = [
-  'Connecting to Telegram session auditor...',
-  'Checking active sessions and devices...',
-  'Looking up login locations & IP geolocations...',
-  'Checking for impossible travel across continents...',
-  'Evaluating Two-Step Password protection status...',
-  'Auditing official Telegram security service notifications...',
-  'Calculating risk and compiling plain-English verdict...',
-  'Logging out security inspection session permanently...',
+  'Verifying uploaded files and archive safety limits...',
+  'Parsing active sessions and identifying device platforms...',
+  'Inspecting IP reputation, geolocations, and Tor/VPN nodes...',
+  'Evaluating impossible travel anomalies across session timestamps...',
+  'Auditing official service chat for takeover patterns & unlinked logins...',
+  'Redacting verification OTPs and building forensic report...',
 ];
 
+const ACCEPTED_EXTENSIONS = ['.json', '.html', '.htm', '.txt', '.zip'];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25 MB
+const MAX_FILES = 5;
+
 export const LinkTelegram: React.FC = () => {
-  const { telegramScan, setTelegramScan, addToast, systemStatus, refreshStatus } = useScan();
+  const { telegramScan, setTelegramScan, loadSampleData } = useScan();
 
-  // If already scanned previously, default to Step 4, otherwise Step 1
-  const [step, setStep] = useState<number>(telegramScan ? 4 : 1);
-  const [agreedToConsent, setAgreedToConsent] = useState(false);
+  const [currentStep, setCurrentStep] = useState<number>(telegramScan ? 4 : 1);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [consentAgreed, setConsentAgreed] = useState<boolean>(false);
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState<boolean>(false);
 
-  // Phone input states
-  const [countryCode, setCountryCode] = useState('+91');
-  const [nationalPhone, setNationalPhone] = useState('');
-  const [maskedPhone, setMaskedPhone] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Flow & auth states
-  const [flowId, setFlowId] = useState<string | null>(null);
-  const [otp, setOtp] = useState('');
-  const [password, setPassword] = useState('');
-  const [needsPassword, setNeedsPassword] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [codeType, setCodeType] = useState<'app' | 'sms' | 'call' | 'other'>('app');
-  const [nextType, setNextType] = useState<'sms' | 'call' | 'other' | null>(null);
-  const [countdown, setCountdown] = useState<number>(0);
-  const [isResending, setIsResending] = useState(false);
+  // File validation
+  const validateAndAddFiles = (newFiles: FileList | File[]) => {
+    setErrorMessage(null);
+    const validList: File[] = [...selectedFiles];
+    let totalSize = validList.reduce((acc, f) => acc + f.size, 0);
 
-  // QR Mode states
-  const [isQrMode, setIsQrMode] = useState(false);
-  const [qrUrl, setQrUrl] = useState<string>('');
-  const [qrExpiresIn, setQrExpiresIn] = useState<number>(60);
-  const [isStartingQr, setIsStartingQr] = useState(false);
+    for (let i = 0; i < newFiles.length; i++) {
+      const file = newFiles[i];
 
-  // Progress & loading states
-  const [isDemo, setIsDemo] = useState(false);
-  const [isSendingCode, setIsSendingCode] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [activeChecklist, setActiveChecklist] = useState<Record<number, boolean>>({});
-
-  const qrPollRef = useRef<number | null>(null);
-
-  // Countdown timer effect for code resend
-  useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = setInterval(() => {
-      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [countdown]);
-
-  // QR Code polling effect
-  useEffect(() => {
-    if (!isQrMode || !flowId || step !== 2) {
-      if (qrPollRef.current) {
-        clearInterval(qrPollRef.current);
-        qrPollRef.current = null;
+      if (validList.length >= MAX_FILES) {
+        setErrorMessage(`Maximum ${MAX_FILES} files allowed.`);
+        break;
       }
-      return;
+
+      // Check extension
+      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+      if (!ACCEPTED_EXTENSIONS.includes(ext)) {
+        setErrorMessage(`File '${file.name}' is not supported. Please upload .json, .html, .txt, or .zip files.`);
+        continue;
+      }
+
+      // Check size
+      if (file.size > MAX_FILE_SIZE) {
+        setErrorMessage(`File '${file.name}' exceeds the 10 MB per-file limit.`);
+        continue;
+      }
+
+      if (totalSize + file.size > MAX_TOTAL_SIZE) {
+        setErrorMessage(`Total upload size exceeds the 25 MB limit.`);
+        break;
+      }
+
+      // Avoid duplicates by name + size
+      if (!validList.some((existing) => existing.name === file.name && existing.size === file.size)) {
+        validList.push(file);
+        totalSize += file.size;
+      }
     }
 
-    const pollStatus = async () => {
-      try {
-        const res = await getTelegramQrStatus(flowId);
-        if (res.status === 'scanned') {
-          if (qrPollRef.current) clearInterval(qrPollRef.current);
-          addToast({
-            type: 'success',
-            title: 'QR Code Scanned',
-            message: 'Telegram app authorized! Starting security inspection...',
-          });
-          setStep(3);
-          runAnalysis(flowId);
-        } else if (res.status === 'needsPassword') {
-          if (qrPollRef.current) clearInterval(qrPollRef.current);
-          setNeedsPassword(true);
-          addToast({
-            type: 'warning',
-            title: 'Cloud Password Required',
-            message: 'Your account has Two-Step Verification enabled.',
-          });
-        } else if (res.status === 'expired') {
-          if (res.qrUrl) {
-            setQrUrl(res.qrUrl);
-            setQrExpiresIn(res.expiresIn || 60);
-          }
-        }
-      } catch (err: any) {
-        // Silently tolerate transient poll error
-      }
-    };
+    setSelectedFiles(validList);
+  };
 
-    qrPollRef.current = window.setInterval(pollStatus, 2000);
-    return () => {
-      if (qrPollRef.current) {
-        clearInterval(qrPollRef.current);
-        qrPollRef.current = null;
-      }
-    };
-  }, [isQrMode, flowId, step]);
+  const handleRemoveFile = (index: number) => {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+    setErrorMessage(null);
+  };
 
-  // Cleanup on unmount if in-flight flow exists
-  useEffect(() => {
-    return () => {
-      if (flowId && step < 4) {
-        cancelTelegram(flowId);
-      }
-    };
-  }, [flowId, step]);
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
 
-  const phoneValidation = validateNationalPhone(countryCode, nationalPhone);
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  };
 
-  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    const res = splitAndCleanPhoneNumber(raw, countryCode);
-    setCountryCode(res.countryCode);
-    setNationalPhone(res.nationalNumber);
-    if (otpSent) {
-      setOtpSent(false);
-      setFlowId(null);
-      setNeedsPassword(false);
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (e.dataTransfer.files) {
+      validateAndAddFiles(e.dataTransfer.files);
     }
   };
 
-  const handleSendCode = async () => {
-    if (!phoneValidation.isValid) {
-      setErrorMsg(phoneValidation.message);
+  const handleStartAnalysis = async () => {
+    if (selectedFiles.length === 0) {
+      setErrorMessage('Please select at least 1 file to analyze.');
+      return;
+    }
+    if (!consentAgreed) {
+      setErrorMessage('Please check the consent box to proceed with analysis.');
       return;
     }
 
-    const e164 = `${countryCode}${nationalPhone}`;
-    const masked = maskE164Phone(countryCode, nationalPhone);
-    setMaskedPhone(masked);
-
-    setIsSendingCode(true);
-    setErrorMsg(null);
+    setErrorMessage(null);
+    setIsAnalyzing(true);
+    setCurrentStep(3);
 
     try {
-      const res = await sendTelegramCode(e164);
-      setFlowId(res.flowId);
-      setIsDemo(!!res.isDemo);
-      setOtpSent(true);
-      setCodeType(res.codeType || 'app');
-      setNextType(res.nextType || null);
-      setCountdown(res.timeout ?? 60);
-
-      if (res.isDemo) {
-        addToast({
-          type: 'info',
-          title: 'Demo Mode Active',
-          message: 'Explicit demo mode active. Enter any verification code.',
-        });
-      } else {
-        const methodMsg =
-          res.codeType === 'sms'
-            ? `SMS code sent to ${masked}`
-            : 'Telegram sent a code to your official Telegram app.';
-        addToast({
-          type: 'success',
-          title: 'Verification Code Sent',
-          message: methodMsg,
-        });
-      }
+      const result = await analyzeTelegramLogs(selectedFiles);
+      setTelegramScan(result);
+      setCurrentStep(4);
     } catch (err: any) {
-      const msg = err?.message || 'Failed to send verification code. Please check your phone number.';
-      setErrorMsg(msg);
-      addToast({
-        type: 'error',
-        title: 'Could Not Send Code',
-        message: msg,
-      });
+      setErrorMessage(err?.message || 'Failed to analyze Telegram export files. Please verify the files and try again.');
+      setCurrentStep(2);
     } finally {
-      setIsSendingCode(false);
+      setIsAnalyzing(false);
     }
   };
 
-  const handleResendCode = async () => {
-    if (!flowId) return;
-    setIsResending(true);
-    setErrorMsg(null);
-
-    try {
-      const res = await resendTelegramCode(flowId);
-      setCodeType(res.codeType || 'app');
-      setNextType(res.nextType || null);
-      setCountdown(res.timeout ?? 60);
-
-      const deliveryName = res.codeType === 'sms' ? 'SMS' : res.codeType === 'call' ? 'Phone call' : 'Telegram app';
-      addToast({
-        type: 'success',
-        title: 'Code Resent',
-        message: `Verification code requested via ${deliveryName}.`,
-      });
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to resend code.';
-      setErrorMsg(msg);
-      addToast({
-        type: 'error',
-        title: 'Resend Failed',
-        message: msg,
-      });
-    } finally {
-      setIsResending(false);
-    }
-  };
-
-  const handleStartQr = async () => {
-    setIsStartingQr(true);
-    setErrorMsg(null);
-    try {
-      const res = await startTelegramQr();
-      setFlowId(res.flowId);
-      setQrUrl(res.qrUrl);
-      setQrExpiresIn(res.expiresIn || 60);
-      setIsQrMode(true);
-      setNeedsPassword(false);
-      addToast({
-        type: 'info',
-        title: 'QR Code Ready',
-        message: 'Scan the code with your official Telegram mobile app.',
-      });
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to initialize Telegram QR code.';
-      setErrorMsg(msg);
-      addToast({
-        type: 'error',
-        title: 'QR Code Error',
-        message: msg,
-      });
-    } finally {
-      setIsStartingQr(false);
-    }
-  };
-
-  const handleCancelQr = () => {
-    if (flowId) {
-      cancelTelegram(flowId);
-    }
-    setFlowId(null);
-    setIsQrMode(false);
-    setNeedsPassword(false);
-  };
-
-  const runAnalysis = async (currentFlowId: string) => {
-    try {
-      const scanResult: TelegramScanResult = await analyzeTelegram(currentFlowId);
-      setTelegramScan(scanResult);
-      setStep(4);
-      addToast({
-        type: 'success',
-        title: 'Investigation Complete',
-        message: 'Telegram session and security footprint audit finished.',
-      });
-    } catch (err: any) {
-      const msg = err?.message || 'Account forensics analysis failed. Please try again.';
-      setErrorMsg(msg);
-      setStep(2);
-      addToast({
-        type: 'error',
-        title: 'Audit Failed',
-        message: msg,
-      });
-    }
-  };
-
-  const handleVerifyAndAnalyze = async () => {
-    if (!flowId) {
-      setErrorMsg('Please request a verification code or QR session first.');
-      return;
-    }
-    if (!isQrMode && (!otp || otp.trim().length < 4)) {
-      setErrorMsg('Please enter the verification code sent by Telegram.');
-      return;
-    }
-    if (needsPassword && (!password || password.trim().length === 0)) {
-      setErrorMsg('Please enter your Two-Step Verification cloud password.');
-      return;
-    }
-
-    setIsVerifying(true);
-    setErrorMsg(null);
-
-    try {
-      const verifyRes = await verifyTelegramCode(flowId, otp, password);
-
-      if (verifyRes.needsPassword) {
-        setNeedsPassword(true);
-        setIsVerifying(false);
-        addToast({
-          type: 'warning',
-          title: 'Cloud Password Required',
-          message: 'Your Telegram account has Two-Step Verification enabled.',
-        });
-        return;
-      }
-
-      setStep(3);
-      await runAnalysis(flowId);
-    } catch (err: any) {
-      const msg = err?.message || 'Invalid code or password. Please verify and try again.';
-      setErrorMsg(msg);
-      addToast({
-        type: 'error',
-        title: 'Verification Failed',
-        message: msg,
-      });
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleAuditAnotherNumber = () => {
-    if (flowId) cancelTelegram(flowId);
+  const handleReset = () => {
     setTelegramScan(null);
-    setStep(2);
-    setNationalPhone('');
-    setMaskedPhone('');
-    setOtp('');
-    setPassword('');
-    setNeedsPassword(false);
-    setOtpSent(false);
-    setIsQrMode(false);
-    setFlowId(null);
-    setErrorMsg(null);
+    setSelectedFiles([]);
+    setConsentAgreed(false);
+    setErrorMessage(null);
+    setCurrentStep(1);
   };
 
-  const toggleChecklist = (idx: number) => {
-    setActiveChecklist((prev) => ({
-      ...prev,
-      [idx]: !prev[idx],
-    }));
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
   };
-
-  const getFindingIcon = (type: TelegramFindingType) => {
-    switch (type) {
-      case 'unknown_device':
-        return <Laptop size={20} className="text-red-400" />;
-      case 'foreign_login':
-        return <Globe size={20} className="text-orange-400" />;
-      case 'impossible_travel':
-        return <Footprints size={20} className="text-red-400" />;
-      case 'no_2fa':
-        return <Lock size={20} className="text-yellow-400" />;
-      case 'suspicious_link':
-        return <Link2 size={20} className="text-cyan-400" />;
-    }
-  };
-
-  const scanData = telegramScan;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      {/* Top Banner & Header */}
-      <div className="text-center space-y-3">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-semibold uppercase tracking-wider">
-          <Send size={13} />
-          <span>Telegram Account Investigation</span>
+    <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+      {/* Page Header */}
+      <div className="text-center max-w-2xl mx-auto space-y-2">
+        <div className="inline-flex p-3 bg-blue-500/10 border border-blue-500/20 rounded-2xl text-blue-400 mb-1">
+          <DownloadCloud className="w-8 h-8" />
         </div>
-        <h1 className="text-3xl font-extrabold text-white tracking-tight">
-          Find Out If Someone Is In Your Telegram
-        </h1>
-        <p className="text-slate-400 text-sm max-w-xl mx-auto">
-          We inspect active sessions, unfamiliar devices, and foreign logins using plain English so you know exactly what is happening.
+        <h1 className="text-3xl font-bold text-white tracking-tight">Telegram Security Forensics</h1>
+        <p className="text-sm text-slate-400">
+          Upload your Telegram Desktop export logs to detect unauthorized sessions, foreign logins, impossible travel, and account takeover signals.
         </p>
       </div>
 
-      {/* Stepper Component */}
-      <div className="glass-card rounded-2xl p-4 sm:p-6 border border-slate-800">
-        <Stepper steps={STEPS} currentStep={step} />
-      </div>
+      {/* Stepper */}
+      <Stepper steps={STEPS} currentStep={currentStep} />
 
-      {/* STEP 1: CONSENT */}
-      {step === 1 && (
-        <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 space-y-6">
-          <div className="flex items-start gap-4">
-            <div className="p-3 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 shrink-0">
-              <ShieldCheck size={28} />
+      {/* STEP 1: EXPORT GUIDE */}
+      {currentStep === 1 && (
+        <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 md:p-8 space-y-8 shadow-xl">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Laptop className="w-5 h-5 text-blue-400" />
+              Step 1: How to Export Your Telegram Logs
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Telegram only allows exporting logs through the official desktop application. Mobile apps cannot generate machine-readable exports.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Card 1 */}
+            <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden">
+              <span className="text-3xl font-black text-slate-800 absolute right-4 top-2 select-none">01</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Laptop className="w-4 h-4 text-blue-400" />
+                <span>Install Telegram Desktop</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Download and install Telegram Desktop on your computer (Windows, macOS, or Linux). Sign in securely by scanning the QR code using your phone's Telegram app (Settings &gt; Devices &gt; Link Desktop Device).
+              </p>
             </div>
-            <div>
-              <h2 className="text-xl font-bold text-white">Your Privacy & Consent First</h2>
-              <p className="text-sm text-slate-300 mt-1 leading-relaxed">
-                Before connecting, please review exactly what this tool inspects. We believe in complete transparency.
+
+            {/* Card 2 */}
+            <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden">
+              <span className="text-3xl font-black text-slate-800 absolute right-4 top-2 select-none">02</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <ShieldCheck className="w-4 h-4 text-purple-400" />
+                <span>Export Active Sessions</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Click <strong>Menu &gt; Settings &gt; Advanced &gt; Export Telegram data</strong>. Untick everything and tick only <strong>"Active sessions"</strong>. Choose <strong>"Machine-readable JSON"</strong> and click Export. (Approve the prompt on your phone if asked).
+              </p>
+            </div>
+
+            {/* Card 3 */}
+            <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden">
+              <span className="text-3xl font-black text-slate-800 absolute right-4 top-2 select-none">03</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <MessageSquare className="w-4 h-4 text-emerald-400" />
+                <span>Export Service Chat (Recommended)</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Open the official chat called <strong>"Telegram"</strong> (verified blue tick). Click the <strong>three dots &gt; Export chat history</strong>, untick media, select <strong>JSON</strong> format, and click Export. This contains login alerts and security notifications.
+              </p>
+            </div>
+
+            {/* Card 4 */}
+            <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden">
+              <span className="text-3xl font-black text-slate-800 absolute right-4 top-2 select-none">04</span>
+              <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                <FileCheck className="w-4 h-4 text-amber-400" />
+                <span>Upload result.json or ZIP</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Each export produces a <code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">result.json</code> or HTML file. File names do not matter because our tool detects files by content. You can upload 1 to 5 files or a single ZIP archive.
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-            <div className="p-4 rounded-xl bg-[#0B1220] border border-slate-800 space-y-2">
-              <div className="flex items-center gap-2 text-cyan-400 font-semibold text-sm">
-                <Laptop size={16} />
-                <span>1. Active Sessions</span>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                We read the list of computers, tablets, and phones currently connected to your profile and their IP locations.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#0B1220] border border-slate-800 space-y-2">
-              <div className="flex items-center gap-2 text-cyan-400 font-semibold text-sm">
-                <Eye size={16} />
-                <span>2. Login Alerts</span>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                We check official Telegram notifications for warning alerts about logins from new cities or strange IP addresses.
-              </p>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#0B1220] border border-slate-800 space-y-2">
-              <div className="flex items-center gap-2 text-cyan-400 font-semibold text-sm">
-                <Lock size={16} />
-                <span>3. Two-Step Password</span>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                We verify whether you have a secondary cloud password set up to prevent SMS interception attacks.
-              </p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl bg-cyan-950/20 border border-cyan-800/30 flex items-start gap-3">
-            <Lock size={18} className="text-cyan-400 shrink-0 mt-0.5" />
-            <div className="text-xs text-slate-300 leading-relaxed space-y-1">
-              <span className="font-bold text-cyan-300 block">Strict Zero-Storage Guarantee</span>
+          {/* Privacy Notice Alert */}
+          <div className="p-4 bg-amber-950/30 border border-amber-800/50 rounded-xl flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200/90 leading-relaxed space-y-1">
+              <p className="font-semibold text-amber-100">Strict Privacy Guarantee &amp; Scope:</p>
               <p>
-                We do not read your private chat messages, photos, contacts, or voice notes. We never store your phone number or access codes. All audit calculations happen in real-time memory and this inspection session is immediately logged out when finished.
+                Do <strong>NOT</strong> upload personal or private group chats. Upload only your <em>Active sessions</em> and the official <em>Telegram service chat</em>. Any verification codes or numeric OTP sequences found in service notifications are automatically masked (<code className="bg-amber-900/60 text-white px-1 rounded">****</code>) upon upload and never stored.
               </p>
             </div>
           </div>
 
-          <div className="pt-2">
-            <label className="flex items-start gap-3 cursor-pointer group select-none">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800">
+            <button
+              onClick={loadSampleData}
+              className="text-xs text-slate-400 hover:text-slate-200 underline transition-colors"
+            >
+              Want to see how this works first? Load demo data
+            </button>
+
+            <button
+              onClick={() => setCurrentStep(2)}
+              className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 transition-all"
+            >
+              I Have My Export Files Ready
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2: UPLOAD LOGS */}
+      {currentStep === 2 && (
+        <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6 shadow-xl">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Upload className="w-5 h-5 text-blue-400" />
+              Step 2: Upload Export Files
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Select 1 to 5 files (.json, .html, .txt, or .zip) from your Telegram Desktop export folder.
+            </p>
+          </div>
+
+          {errorMessage && (
+            <div className="p-3.5 bg-red-900/30 border border-red-800/60 rounded-xl flex items-start gap-2.5 text-xs text-red-300">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {/* Drag & Drop Zone */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
+              isDragOver
+                ? 'border-blue-500 bg-blue-500/10'
+                : 'border-slate-700 hover:border-slate-600 bg-[#0B0F19]'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".json,.html,.htm,.txt,.zip"
+              className="hidden"
+              onChange={(e) => e.target.files && validateAndAddFiles(e.target.files)}
+            />
+            <div className="flex flex-col items-center gap-3">
+              <div className="p-3 bg-blue-500/10 rounded-full text-blue-400">
+                <Upload className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white">
+                  Drag and drop your export files here, or <span className="text-blue-400 underline">browse</span>
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Supports JSON, HTML, TXT, or ZIP (Max 5 files, 10 MB each, 25 MB total)
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Selected File List */}
+          {selectedFiles.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Selected Files ({selectedFiles.length} of {MAX_FILES})
+              </span>
+              <div className="space-y-2">
+                {selectedFiles.map((file, idx) => (
+                  <div
+                    key={`${file.name}-${idx}`}
+                    className="flex items-center justify-between p-3 bg-[#0B0F19] border border-slate-800 rounded-xl text-xs"
+                  >
+                    <div className="flex items-center gap-3">
+                      <FileText className="w-4 h-4 text-blue-400" />
+                      <div>
+                        <span className="font-medium text-white block">{file.name}</span>
+                        <span className="text-[11px] text-slate-500">{formatFileSize(file.size)}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveFile(idx);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800 transition-colors"
+                      title="Remove file"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Consent Checkbox */}
+          <div className="p-4 bg-[#0B0F19] border border-slate-800 rounded-xl">
+            <label className="flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"
-                checked={agreedToConsent}
-                onChange={(e) => setAgreedToConsent(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-400 focus:ring-offset-slate-950 transition-colors"
+                checked={consentAgreed}
+                onChange={(e) => setConsentAgreed(e.target.checked)}
+                className="mt-0.5 rounded bg-slate-900 border-slate-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
               />
-              <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
-                I understand and agree to run a read-only cybersecurity investigation on my Telegram account.
+              <span className="text-xs text-slate-300 leading-relaxed">
+                <strong className="text-white">I agree to analyze these files.</strong> I understand that my uploaded log files are processed in server memory and deleted immediately after the analysis. Only a sanitized summary of findings is recorded.
               </span>
             </label>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800">
             <button
-              disabled={!agreedToConsent}
-              onClick={() => setStep(2)}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-glow hover:shadow-glow-lg"
+              onClick={() => setCurrentStep(1)}
+              className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
             >
-              <span>Continue to Connect</span>
-              <ArrowRight size={16} />
+              &larr; Back to Export Instructions
+            </button>
+
+            <button
+              onClick={handleStartAnalysis}
+              disabled={selectedFiles.length === 0 || !consentAgreed}
+              className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 transition-all"
+            >
+              Analyze Logs
+              <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       )}
 
-      {/* STEP 2: CONNECT */}
-      {step === 2 && (
-        <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 space-y-6">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-white">
-                {isQrMode ? 'Scan QR Code with Telegram' : 'Connect Telegram for Audit'}
-              </h2>
-              <p className="text-sm text-slate-400 mt-1">
-                {isQrMode
-                  ? 'Open Telegram on your mobile phone and scan this QR code to authorize inspection.'
-                  : 'Enter your mobile number to receive a temporary one-time verification code.'}
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                if (flowId) cancelTelegram(flowId);
-                setStep(1);
-              }}
-              className="text-xs text-slate-400 hover:text-white transition-colors"
-            >
-              Back to Consent
-            </button>
-          </div>
-
-          {/* Service Unavailable Friendly Notice (PART A requirement) */}
-          {systemStatus && !systemStatus.telegram && (
-            <div className="p-8 rounded-2xl bg-slate-900/90 border border-slate-800 text-center space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
-                <AlertTriangle size={28} />
-              </div>
-              <div className="space-y-1.5">
-                <h3 className="text-lg font-bold text-white">
-                  Telegram linking is not available right now.
-                </h3>
-                <p className="text-sm text-slate-400 max-w-md mx-auto">
-                  The service owner needs to finish a one-time setup.
-                </p>
-              </div>
-              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
-                <Link
-                  to="/setup"
-                  className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold underline inline-flex items-center gap-1"
-                >
-                  <span>Owner setup instructions</span>
-                  <ExternalLink size={12} />
-                </Link>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await refreshStatus();
-                    addToast({
-                      type: 'info',
-                      title: 'Configuration Checked',
-                      message: 'Backend status re-checked.',
-                    });
-                  }}
-                  className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <RotateCcw size={12} />
-                  <span>Re-check configuration</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Demo Mode Notice Banner */}
-          {isDemo && (
-            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-              <AlertTriangle size={16} className="shrink-0 text-amber-400" />
-              <div>
-                <span className="font-semibold block text-amber-200">
-                  Demo Mode Active
-                </span>
-                <span className="text-slate-300">
-                  You can test this audit flow with any phone number. A simulated verification code (e.g. 12345) will work.
-                </span>
-              </div>
-            </div>
-          )}
-
-          {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-xs flex items-center gap-2">
-              <AlertTriangle size={15} className="shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {/* Only render connection forms if Telegram is configured or in demo */}
-          {(!systemStatus || systemStatus.telegram) && (
-            <div className="space-y-6 max-w-xl">
-              {/* QR Code Flow (PART D) */}
-              {isQrMode ? (
-                <div className="space-y-5 animate-fadeIn">
-                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col items-center text-center space-y-4">
-                    {/* Render QR with qrcode.react */}
-                    {qrUrl ? (
-                      <div className="p-3 bg-white rounded-2xl shadow-xl">
-                        <QRCodeSVG value={qrUrl} size={210} level="M" />
-                      </div>
-                    ) : (
-                      <div className="w-[210px] h-[210px] flex items-center justify-center bg-slate-950 rounded-2xl border border-slate-800">
-                        <Loader2 size={32} className="animate-spin text-cyan-400" />
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-xs font-semibold">
-                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                        <span>Waiting for scan in Telegram app...</span>
-                      </div>
-                      <p className="text-xs text-slate-300 font-medium">
-                        Telegram app &rarr; Settings &rarr; Devices &rarr; Link Desktop Device &rarr; scan
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Cloud Password field if QR scan triggered SessionPasswordNeededError */}
-                  {needsPassword && (
-                    <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
-                      <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
-                        <Lock size={15} />
-                        <span>Two-Step Verification Password Required</span>
-                      </div>
-                      <p className="text-xs text-slate-300 leading-relaxed">
-                        Your Telegram account has cloud password protection enabled. Enter your password to complete verification. It is held only in temporary server memory and never stored.
-                      </p>
-                      <div className="relative mt-2">
-                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                          <KeyRound size={17} />
-                        </div>
-                        <input
-                          type="password"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Enter your Two-Step Verification password"
-                          className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        disabled={isVerifying || !password}
-                        onClick={handleVerifyAndAnalyze}
-                        className="mt-2 w-full py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-xs hover:bg-cyan-300 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-                      >
-                        {isVerifying ? (
-                          <>
-                            <Loader2 size={14} className="animate-spin" />
-                            <span>Verifying Password...</span>
-                          </>
-                        ) : (
-                          <span>Submit Password & Start Audit</span>
-                        )}
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between pt-2">
-                    <button
-                      type="button"
-                      onClick={handleCancelQr}
-                      className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
-                    >
-                      <Smartphone size={14} />
-                      <span>Use phone number instead</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Phone Number & OTP Flow (PART B & PART C) */
-                <div className="space-y-5">
-                  {/* Phone input with Country Code Dropdown */}
-                  {!otpSent && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
-                          Mobile Number
-                        </label>
-                        <button
-                          type="button"
-                          disabled={isStartingQr}
-                          onClick={handleStartQr}
-                          className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold inline-flex items-center gap-1.5 transition-colors"
-                        >
-                          <QrCode size={14} />
-                          <span>Link with QR code instead</span>
-                        </button>
-                      </div>
-
-                      <div className="flex gap-2">
-                        {/* Country Code Dropdown */}
-                        <div className="relative w-40 shrink-0">
-                          <select
-                            value={countryCode}
-                            onChange={(e) => setCountryCode(e.target.value)}
-                            className="w-full h-11 pl-3 pr-8 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-semibold focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 appearance-none transition-colors cursor-pointer"
-                          >
-                            {COUNTRIES.map((c) => (
-                              <option key={c.code} value={c.code} className="bg-slate-900 text-white">
-                                {c.flag} {c.code} ({c.name})
-                              </option>
-                            ))}
-                          </select>
-                          <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400 text-xs">
-                            ▼
-                          </div>
-                        </div>
-
-                        {/* National Number Input */}
-                        <div className="relative flex-1">
-                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                            <Smartphone size={17} />
-                          </div>
-                          <input
-                            type="tel"
-                            value={nationalPhone}
-                            onChange={handlePhoneChange}
-                            placeholder={countryCode === '+91' ? 'e.g. 98765 43210' : 'Mobile number'}
-                            className="w-full h-11 pl-10 pr-4 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                          />
-                        </div>
-
-                        {/* Send Code Button */}
-                        <button
-                          type="button"
-                          disabled={isSendingCode || !phoneValidation.isValid}
-                          onClick={handleSendCode}
-                          className="h-11 px-5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0 shadow-glow"
-                        >
-                          {isSendingCode ? (
-                            <>
-                              <Loader2 size={13} className="animate-spin" />
-                              <span>Sending...</span>
-                            </>
-                          ) : (
-                            <span>Send Code</span>
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Live validation feedback */}
-                      <p
-                        className={`text-xs transition-colors ${
-                          phoneValidation.isValid ? 'text-emerald-400 font-medium' : 'text-slate-400'
-                        }`}
-                      >
-                        {phoneValidation.message}
-                      </p>
-                    </div>
-                  )}
-
-                  {/* OTP Section once code is sent */}
-                  {otpSent && (
-                    <div className="space-y-4 animate-fadeIn">
-                      {/* Masked Phone Info Banner */}
-                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle size={16} className="text-emerald-400" />
-                          <span className="text-xs text-slate-300">
-                            Code requested for <strong className="text-white font-mono">{maskedPhone}</strong>
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (flowId) cancelTelegram(flowId);
-                            setOtpSent(false);
-                            setFlowId(null);
-                            setOtp('');
-                          }}
-                          className="text-[11px] text-cyan-400 hover:underline font-semibold"
-                        >
-                          Change Number
-                        </button>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                          Telegram Verification Code
-                        </label>
-                        <div className="relative">
-                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                            <KeyRound size={17} />
-                          </div>
-                          <input
-                            type="text"
-                            value={otp}
-                            onChange={(e) => setOtp(e.target.value)}
-                            placeholder="e.g. 59381"
-                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono tracking-widest focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                          />
-                        </div>
-
-                        {/* Truthful delivery instruction based on codeType (PART C requirement) */}
-                        <div className="mt-2 text-xs space-y-1">
-                          <p className="text-slate-300 font-medium flex items-center gap-1.5">
-                            <Send size={12} className="text-cyan-400 shrink-0" />
-                            <span>
-                              {codeType === 'app'
-                                ? "Open your Telegram app and look for a message from 'Telegram'"
-                                : codeType === 'sms'
-                                ? `We sent an SMS to ${maskedPhone}`
-                                : codeType === 'call'
-                                ? `Telegram will call ${maskedPhone} with your code`
-                                : 'Check your Telegram app or SMS for the verification code'}
-                            </span>
-                          </p>
-
-                          {/* Countdown and Resend */}
-                          <div className="flex items-center gap-3 pt-1 text-[11px]">
-                            {countdown > 0 ? (
-                              <span className="text-slate-500 font-mono">
-                                Resend available in {countdown}s
-                              </span>
-                            ) : nextType ? (
-                              <button
-                                type="button"
-                                disabled={isResending}
-                                onClick={handleResendCode}
-                                className="text-cyan-400 hover:text-cyan-300 font-semibold underline flex items-center gap-1"
-                              >
-                                {isResending && <Loader2 size={11} className="animate-spin" />}
-                                <span>Didn't get the code? Send it another way</span>
-                              </button>
-                            ) : (
-                              <span className="text-slate-500">
-                                No alternative delivery method reported by Telegram
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Telegram Login Alert Disclaimer */}
-                        <p className="text-[11px] text-cyan-400/90 mt-2 flex items-center gap-1.5">
-                          <ShieldCheck size={13} className="shrink-0 text-cyan-400" />
-                          <span>Telegram will send you a 'new login' alert. That is this tool, and it logs out when finished.</span>
-                        </p>
-                      </div>
-
-                      {/* Password field if 2-step verification is enabled */}
-                      {needsPassword && (
-                        <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
-                          <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
-                            <Lock size={15} />
-                            <span>Two-Step Verification Password Required</span>
-                          </div>
-                          <p className="text-xs text-slate-300 leading-relaxed">
-                            Your Telegram account has cloud password protection enabled. Enter your password to inspect session logs. It is held only in temporary server memory and never stored.
-                          </p>
-                          <div className="relative mt-2">
-                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                              <KeyRound size={17} />
-                            </div>
-                            <input
-                              type="password"
-                              value={password}
-                              onChange={(e) => setPassword(e.target.value)}
-                              placeholder="Enter your Two-Step Verification password"
-                              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Connect & Run Audit Button */}
-                      <div className="pt-2">
-                        <button
-                          disabled={!otpSent || isVerifying || otp.trim().length < 4}
-                          onClick={handleVerifyAndAnalyze}
-                          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-glow hover:shadow-glow-lg"
-                        >
-                          {isVerifying ? (
-                            <>
-                              <Loader2 size={16} className="animate-spin" />
-                              <span>Verifying & Starting Audit...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span>Connect & Run Audit</span>
-                              <ArrowRight size={16} />
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
-            <HelpCircle size={15} className="text-cyan-400 shrink-0" />
-            <span>
-              Clicking <strong>Connect & Run Audit</strong> queries active sessions and IP geolocations, then immediately calls logout.
-            </span>
-          </div>
+      {/* STEP 3: ANALYZING */}
+      {currentStep === 3 && (
+        <div className="bg-[#111827] border border-slate-800 rounded-2xl p-10 shadow-xl">
+          <Analyzing title="Auditing Telegram Export Snapshot" messages={ANALYZE_MESSAGES} />
         </div>
       )}
 
-      {/* STEP 3: ANALYZE */}
-      {step === 3 && (
-        <Analyzing
-          messages={ANALYZE_MESSAGES}
-          title="Investigating Telegram Session Footprints"
-          subtitle="Looking for unauthorized foreign logins, impossible travel, and unverified devices..."
-        />
-      )}
-
-      {/* STEP 4: RESULT */}
-      {step === 4 && scanData && (
+      {/* STEP 4: RESULT VIEW */}
+      {currentStep === 4 && telegramScan && (
         <div className="space-y-6">
-          {/* Demo Mode Notice Banner on Result */}
-          {(isDemo || scanData.isDemo) && (
-            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-              <AlertTriangle size={16} className="shrink-0 text-amber-400" />
-              <div>
-                <span className="font-semibold block text-amber-200">
-                  Demo Mode Active
-                </span>
-                <span className="text-slate-300">
-                  This report was generated using simulated mock data.
-                </span>
+          {/* Result Banner Card */}
+          <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 md:p-8 shadow-xl relative overflow-hidden">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+              <div className="space-y-2 text-center md:text-left">
+                <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+                  <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                    Offline Export Analysis
+                  </span>
+                  {telegramScan.isDemo && (
+                    <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Demo Data
+                    </span>
+                  )}
+                  <RiskBadge level={telegramScan.riskLevel} />
+                </div>
+                <h2 className="text-2xl font-bold text-white tracking-tight">
+                  Telegram Forensic Verdict: {telegramScan.riskLevel.toUpperCase()} RISK
+                </h2>
+                <p className="text-sm text-slate-300 max-w-xl">{telegramScan.summary}</p>
+                {telegramScan.detectedFiles && (
+                  <div className="flex flex-wrap items-center gap-3 pt-2 text-xs text-slate-400">
+                    <span className="inline-flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      Sessions: {telegramScan.detectedFiles.sessions ? 'Detected' : 'Not included'}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      Login Alerts: {telegramScan.detectedFiles.loginAlerts ? 'Detected' : 'Not included'}
+                    </span>
+                    {telegramScan.detectedFiles.ignoredNonServiceChats > 0 && (
+                      <span className="text-amber-400">
+                        ({telegramScan.detectedFiles.ignoredNonServiceChats} personal chat ignored)
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 flex flex-col items-center">
+                <RiskGauge score={telegramScan.riskScore} size="lg" />
               </div>
             </div>
-          )}
+          </div>
 
-          {/* Main Verdict Card with Large Risk Gauge */}
-          <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex-1 space-y-3 text-center md:text-left">
-              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
-                <RiskBadge level={scanData.riskLevel} size="lg" />
-                <span className="text-xs text-slate-400 font-mono">
-                  Target: {maskedPhone || scanData.phone}
-                </span>
-                <span className="text-xs text-cyan-400 font-medium">
-                  {scanData.accountName}
-                </span>
-              </div>
-              <h2 className="text-2xl font-extrabold text-white">
-                {scanData.riskLevel === 'critical' || scanData.riskLevel === 'high'
-                  ? 'Compromise Evidence Identified'
-                  : 'Your Telegram Account Is Clean'}
-              </h2>
-              <p className="text-sm text-slate-300 leading-relaxed max-w-xl">
-                {scanData.summary}
-              </p>
+          {/* What These Logs Could NOT Show Card (Part C.4 / B.4 requirement) */}
+          <div className="bg-[#111827] border border-blue-900/40 rounded-2xl p-6 space-y-4 shadow-lg">
+            <div className="flex items-center gap-2.5 text-blue-400">
+              <Info className="w-5 h-5 shrink-0" />
+              <h3 className="text-base font-semibold text-white">What These Export Logs Could Not Show</h3>
             </div>
-
-            <div className="shrink-0 flex flex-col items-center">
-              <RiskGauge score={scanData.riskScore} level={scanData.riskLevel} size="lg" />
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {telegramScan.dataCoverage ||
+                'Telegram snapshot exports cannot verify real-time Two-Step Verification status or prove who physically operated the authorized devices.'}
+            </p>
+            <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-4 space-y-2">
+              <span className="text-xs font-semibold text-slate-200 uppercase tracking-wider block">
+                Required Manual Verification Checks:
+              </span>
+              <ul className="space-y-1.5 text-xs text-slate-300">
+                {(telegramScan.manualChecks || [
+                  'Turn on Two-Step Verification (Settings > Privacy and Security > Two-Step Verification).',
+                  'Add a verified recovery email address.',
+                  'Review Active Sessions periodically in Settings > Devices.',
+                  'Audit Phone Number Privacy settings to ensure your number is private.',
+                ]).map((checkText, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    <span>{checkText}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </div>
 
           {/* Active Sessions Table */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white">Active Sessions & Logged-In Devices</h3>
-                <p className="text-xs text-slate-400">
-                  Every computer, phone, or application that currently has access to your chats.
-                </p>
-              </div>
-              <span className="text-xs font-semibold text-cyan-400">
-                {scanData.sessions.length} Sessions Detected
-              </span>
+          {telegramScan.sessions.length > 0 && (
+            <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Laptop className="w-4 h-4 text-blue-400" />
+                Active Sessions Identified ({telegramScan.sessions.length})
+              </h3>
+              <SessionTable sessions={telegramScan.sessions} />
             </div>
-            <SessionTable
-              sessions={scanData.sessions}
-              onTerminateSession={(id) => {
-                const updated = {
-                  ...scanData,
-                  sessions: scanData.sessions.filter((s) => s.id !== id),
-                };
-                setTelegramScan(updated);
-              }}
-            />
-          </div>
+          )}
 
-          {/* Security Findings List */}
-          <div className="space-y-3">
-            <h3 className="text-lg font-bold text-white">Security Findings & Red Flags</h3>
-            <div className="space-y-3">
-              {scanData.findings.map((f) => (
-                <div
-                  key={f.id}
-                  className={`glass-card rounded-2xl p-5 border border-slate-800 flex items-start gap-4 ${
-                    f.risk === 'critical'
-                      ? 'border-l-4 border-l-red-500'
-                      : f.risk === 'high'
-                      ? 'border-l-4 border-l-orange-500'
-                      : 'border-l-4 border-l-yellow-500'
-                  }`}
-                >
-                  <div className="p-2.5 rounded-xl bg-slate-800 text-white shrink-0 border border-slate-700/80">
-                    {getFindingIcon(f.type)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                      <h4 className="text-sm font-bold text-white">{f.title}</h4>
-                      <RiskBadge level={f.risk} size="sm" />
-                    </div>
-                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                      {f.explanation}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* How It Likely Happened */}
-          <div className="glass-card rounded-2xl p-6 border border-slate-800 bg-gradient-to-br from-[#111A2E] to-[#0D1526] space-y-3">
-            <div className="flex items-center gap-2.5 text-cyan-400">
-              <Compass size={20} />
-              <h3 className="text-base font-bold text-white">How It Likely Happened</h3>
-            </div>
-            <p className="text-sm text-slate-300 leading-relaxed">
-              {scanData.howItHappened}
-            </p>
-          </div>
-
-          {/* What To Do Now Checklist */}
-          <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white">What You Should Do Right Now</h3>
-                <p className="text-xs text-slate-400">Follow these plain-English steps to kick out the intruder.</p>
-              </div>
-              <span className="text-xs text-cyan-400 font-mono">
-                {Object.values(activeChecklist).filter(Boolean).length}/{scanData.actionChecklist.length} Done
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              {scanData.actionChecklist.map((action, idx) => {
-                const isChecked = !!activeChecklist[idx];
-                return (
+          {/* Forensic Findings */}
+          {telegramScan.findings.length > 0 && (
+            <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                Identified Security Findings ({telegramScan.findings.length})
+              </h3>
+              <div className="space-y-3">
+                {telegramScan.findings.map((f) => (
                   <div
-                    key={idx}
-                    onClick={() => toggleChecklist(idx)}
-                    className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-start gap-3 ${
-                      isChecked
-                        ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-200'
-                        : 'bg-[#0B1220] border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
+                    key={f.id}
+                    className="p-4 bg-[#0B0F19] border border-slate-800 rounded-xl flex items-start justify-between gap-4"
                   >
-                    <div
-                      className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                        isChecked ? 'bg-emerald-500 text-slate-950' : 'border border-slate-600 bg-slate-900'
-                      }`}
-                    >
-                      {isChecked && <CheckCircle size={14} />}
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm text-white">{f.title}</span>
+                        {f.date && <span className="text-[11px] text-slate-500 font-mono">({f.date})</span>}
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">{f.explanation}</p>
                     </div>
-                    <span className={`text-xs sm:text-sm leading-relaxed ${isChecked ? 'line-through text-slate-400' : ''}`}>
-                      {action}
-                    </span>
+                    <RiskBadge level={f.risk} />
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Bottom Actions */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800">
+          {/* Action Checklist */}
+          {telegramScan.actionChecklist.length > 0 && (
+            <div className="bg-[#111827] border border-slate-800 rounded-2xl p-6 space-y-3 shadow-xl">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                Recommended Immediate Actions
+              </h3>
+              <ul className="space-y-2">
+                {telegramScan.actionChecklist.map((action, idx) => (
+                  <li key={idx} className="p-3 bg-[#0B0F19] border border-slate-800 rounded-xl text-xs text-slate-200 flex items-center gap-2.5">
+                    <span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 font-bold flex items-center justify-center shrink-0 text-[10px]">
+                      {idx + 1}
+                    </span>
+                    <span>{action}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4">
             <button
-              onClick={handleAuditAnotherNumber}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors"
+              onClick={handleReset}
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex items-center gap-2 transition-colors"
             >
-              <RotateCcw size={14} />
-              <span>Audit Another Number</span>
+              <RotateCcw className="w-3.5 h-3.5" />
+              Scan Another Export
             </button>
 
-            <div className="flex items-center gap-3">
-              <Link
-                to="/repo"
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-white border border-slate-700 transition-colors"
-              >
-                <span>Check Your GitHub Repo</span>
-                <ArrowRight size={14} />
-              </Link>
-              <Link
-                to="/report"
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold transition-all shadow-glow hover:shadow-glow-lg"
-              >
-                <FileText size={14} />
-                <span>Download Report</span>
-              </Link>
-            </div>
+            <Link
+              to="/report"
+              className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 transition-all"
+            >
+              View Full Incident Dossier
+              <ArrowRight className="w-4 h-4" />
+            </Link>
           </div>
         </div>
       )}

@@ -12,12 +12,7 @@ export interface TelegramSession {
   flagNote?: string;
 }
 
-export type TelegramFindingType =
-  | 'unknown_device'
-  | 'foreign_login'
-  | 'impossible_travel'
-  | 'no_2fa'
-  | 'suspicious_link';
+export type TelegramFindingType = string;
 
 export interface TelegramFinding {
   id: string;
@@ -26,6 +21,13 @@ export interface TelegramFinding {
   explanation: string;
   risk: RiskLevel;
   date?: string;
+}
+
+export interface DetectedFilesInfo {
+  sessions: boolean;
+  loginAlerts: boolean;
+  ignoredNonServiceChats: number;
+  fileDetails: string[];
 }
 
 export interface TelegramScanResult {
@@ -39,7 +41,10 @@ export interface TelegramScanResult {
   howItHappened: string;
   actionChecklist: string[];
   timestamp: string;
-  twoFactorEnabled: boolean;
+  twoFactorEnabled?: boolean | null;
+  detectedFiles?: DetectedFilesInfo;
+  dataCoverage?: string;
+  manualChecks?: string[];
   isDemo?: boolean;
 }
 
@@ -222,15 +227,70 @@ export interface ToastNotification {
   message?: string;
 }
 
-export interface SystemStatus {
-  telegram: boolean;
-  githubToken: boolean;
-  github_token?: boolean;
-  abuseipdb: boolean;
-  virustotal: boolean;
-  gitInstalled: boolean;
-  git_installed?: boolean;
-  banditAvailable: boolean;
-  bandit_available?: boolean;
+// User & Auth Types
+export interface User {
+  id: number;
+  name: string;
+  email: string;
+  role: 'user' | 'admin';
+  isActive: boolean;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  scanCount?: number;
 }
 
+export interface AuthResponse {
+  token: string;
+  user: User;
+}
+
+// Admin Types
+export interface AdminOverview {
+  totalUsers: number;
+  newUsers7d: number;
+  totalScans: number;
+  realScans: number;
+  demoScans: number;
+  averageRisk: number;
+  scansPerModule: {
+    telegram: number;
+    repo: number;
+    network: number;
+  };
+  riskDistribution: {
+    low: number;
+    medium: number;
+    high: number;
+    critical: number;
+  };
+  scansPerDay: { date: string; count: number }[];
+}
+
+export interface ActivityLogItem {
+  id: number;
+  userId?: number | null;
+  action: string;
+  detail?: string | null;
+  createdAt: string;
+}
+
+export interface UserDetail {
+  profile: User;
+  scans: {
+    id: number;
+    module: string;
+    targetLabel: string;
+    riskScore: number;
+    riskLevel: RiskLevel;
+    isDemo: boolean;
+    createdAt: string;
+    findingsSummary: string;
+  }[];
+  reports: {
+    id: number;
+    overallScore: number;
+    overallRisk: RiskLevel;
+    createdAt: string;
+  }[];
+  activity: ActivityLogItem[];
+}

@@ -9,9 +9,6 @@ async def test_live_network_and_repo_and_report_end_to_end():
         # 1. Real Status Check
         status_res = await ac.get("/api/status")
         assert status_res.status_code == 200
-        status_data = status_res.json()
-        assert "telegram" in status_data
-        assert "gitInstalled" in status_data or "git_installed" in status_data
 
         # 2. Real Network Check: IP (8.8.8.8)
         ip_res = await ac.post("/api/network/ip", json={"ip": "8.8.8.8"})

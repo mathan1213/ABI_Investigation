@@ -226,6 +226,9 @@ async def clone_repository(repo_url: str, branch: Optional[str], target_dir: str
     Performs a safe, shallow clone without git hooks or submodules.
     Returns the detected active branch name.
     """
+    if not shutil.which("git"):
+        raise ValueError("Git command-line tool is not installed or not available in PATH on the server. Please install Git to scan repositories.")
+
     base_cmd = [
         "git",
         "clone",

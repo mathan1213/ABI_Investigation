@@ -163,13 +163,7 @@ class RepoScanResponse(AppBaseModel):
 # 5. Telegram Check Models
 # ---------------------------------------------------------------------------
 
-TelegramFindingType = Literal[
-    "unknown_device",
-    "foreign_login",
-    "impossible_travel",
-    "no_2fa",
-    "suspicious_link",
-]
+TelegramFindingType = str
 
 class TelegramSession(AppBaseModel):
     id: str
@@ -192,8 +186,15 @@ class TelegramFinding(AppBaseModel):
     date: Optional[str] = None
 
 
+class DetectedFilesInfo(AppBaseModel):
+    sessions: bool = False
+    login_alerts: bool = Field(False, alias="loginAlerts")
+    ignored_non_service_chats: int = Field(0, alias="ignoredNonServiceChats")
+    file_details: List[str] = Field(default_factory=list, alias="fileDetails")
+
+
 class TelegramScanResult(AppBaseModel):
-    phone: str
+    phone: str = "Uploaded Export"
     account_name: str = Field(..., alias="accountName")
     risk_score: int = Field(..., alias="riskScore", ge=0, le=100)
     risk_level: RiskLevel = Field(..., alias="riskLevel")
@@ -203,67 +204,11 @@ class TelegramScanResult(AppBaseModel):
     how_it_happened: str = Field(..., alias="howItHappened")
     action_checklist: List[str] = Field(..., alias="actionChecklist")
     timestamp: str
-    two_factor_enabled: bool = Field(..., alias="twoFactorEnabled")
+    two_factor_enabled: Optional[bool] = Field(default=None, alias="twoFactorEnabled")
+    detected_files: Optional[DetectedFilesInfo] = Field(default=None, alias="detectedFiles")
+    data_coverage: Optional[str] = Field(default=None, alias="dataCoverage")
+    manual_checks: List[str] = Field(default_factory=list, alias="manualChecks")
 
-
-class TelegramSendCodeRequest(AppBaseModel):
-    phone: str = Field(..., description="Phone number in international E.164 format (+1234567890)")
-
-
-class TelegramSendCodeResponse(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-    message: str = "Verification code requested from Telegram"
-    code_type: str = Field("app", alias="codeType")  # 'app', 'sms', 'call', 'other'
-    next_type: Optional[str] = Field(None, alias="nextType")  # 'sms', 'call', None
-    timeout: int = Field(60, alias="timeout")  # seconds
-
-
-class TelegramResendCodeRequest(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-
-
-class TelegramResendCodeResponse(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-    message: str = "Verification code resent"
-    code_type: str = Field("app", alias="codeType")
-    next_type: Optional[str] = Field(None, alias="nextType")
-    timeout: int = Field(60, alias="timeout")
-
-
-class TelegramQRStartResponse(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-    qr_url: str = Field(..., alias="qrUrl")
-    expires_in: int = Field(..., alias="expiresIn")
-
-
-class TelegramQRStatusResponse(AppBaseModel):
-    status: Literal["waiting", "scanned", "needsPassword", "expired"]
-    qr_url: Optional[str] = Field(None, alias="qrUrl")
-    expires_in: Optional[int] = Field(None, alias="expiresIn")
-
-
-class TelegramVerifyRequest(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-    code: str
-    password: Optional[str] = None
-
-
-class TelegramVerifyResponse(AppBaseModel):
-    status: str
-    flow_id: str = Field(..., alias="flowId")
-    needs_password: bool = Field(default=False, alias="needsPassword")
-
-
-class TelegramAnalyzeRequest(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-
-
-class TelegramCancelRequest(AppBaseModel):
-    flow_id: str = Field(..., alias="flowId")
-
-
-class TelegramCancelResponse(AppBaseModel):
-    status: str = "cancelled"
 
 
 # ---------------------------------------------------------------------------

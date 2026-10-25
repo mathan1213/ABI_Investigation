@@ -98,7 +98,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
         modules.append(
             ModuleScore(
                 module="telegram",
-                name="Telegram Account Security",
+                name="Telegram Account Security (based on uploaded logs)",
                 scanned=True,
                 score=tg_score,
                 riskLevel=tg_level,
@@ -110,7 +110,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
         modules.append(
             ModuleScore(
                 module="telegram",
-                name="Telegram Account Security",
+                name="Telegram Account Security (based on uploaded logs)",
                 scanned=False,
                 score=None,
                 riskLevel=None,
@@ -693,8 +693,13 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
     # -----------------------------------------------------------------------
     # 7. Disclosures & API Key Warnings in Limitations
     # -----------------------------------------------------------------------
-    if not tg:
+    if tg:
+        limitations.append("Telegram analysis is based on uploaded export logs. Snapshot exports cannot show two-step verification status and cannot prove who logged in.")
+        if tg.data_coverage:
+            limitations.append(f"Telegram Data Coverage: {tg.data_coverage}")
+    else:
         limitations.append("Telegram module was not scanned; unauthorized devices and active chat sessions cannot be verified.")
+
     if not repo:
         limitations.append("GitHub repository module was not scanned; source code secrets and vulnerable dependencies cannot be verified.")
     if not has_network:
@@ -793,8 +798,8 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
     if tg:
         connected_accounts.append(
             ConnectedAccountItem(
-                name=f"Telegram ({tg.phone})",
-                service="Telegram MTProto",
+                name=f"Telegram ({tg.account_name or 'Uploaded Export'})",
+                service="Telegram Desktop Export (based on uploaded logs)",
                 connectedAt=now_str,
                 status=f"Risk Score {tg.risk_score}/100 ({tg.risk_level.title()})",
                 isDemo=is_tg_demo,
@@ -825,6 +830,7 @@ def generate_comprehensive_report(payload: GenerateReportRequest) -> GenerateRep
         "Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed real-data modules. "
         "Demo modules are strictly excluded from the overall score and the Critical-forces-High rule. "
         "If any real module contains a finding with Critical severity, the composite risk rating is elevated to at least High. "
+        "Note: Results are estimates from a snapshot export, which cannot show two-step verification and cannot prove who logged in. "
         "Unscanned and demo modules are omitted from the computation."
     )
 

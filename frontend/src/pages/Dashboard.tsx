@@ -44,7 +44,6 @@ export const Dashboard: React.FC = () => {
     loadSampleData,
     hasAnyScan,
     demoModules,
-    systemStatus,
   } = useScan();
 
   const isTgScanned = telegramScan !== null;
@@ -167,64 +166,6 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* System Setup Banner if Telegram or Git missing */}
-      {systemStatus && (!systemStatus.telegram || !systemStatus.gitInstalled) && (
-        <div className="p-4 sm:p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-3">
-          <div className="flex items-center gap-2 text-sm font-bold text-amber-300">
-            <AlertTriangle size={18} className="shrink-0" />
-            <span>Setup Needed for Full Real Data Forensics</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            {!systemStatus.telegram && (
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-amber-500/20 space-y-1">
-                <div className="font-semibold text-amber-300 flex items-center gap-1.5">
-                  <Send size={13} />
-                  <span>Telegram API Keys Missing</span>
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  Add <code className="text-amber-300 bg-slate-950 px-1 py-0.5 rounded">TELEGRAM_API_ID</code> and{' '}
-                  <code className="text-amber-300 bg-slate-950 px-1 py-0.5 rounded">TELEGRAM_API_HASH</code> from{' '}
-                  <a
-                    href="https://my.telegram.org"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-cyan-400 underline font-semibold"
-                  >
-                    my.telegram.org
-                  </a>{' '}
-                  to <code className="text-amber-300 bg-slate-950 px-1 py-0.5 rounded">backend/.env</code>.
-                </p>
-              </div>
-            )}
-            {!systemStatus.gitInstalled && (
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-amber-500/20 space-y-1">
-                <div className="font-semibold text-amber-300 flex items-center gap-1.5">
-                  <GitBranch size={13} />
-                  <span>Git CLI Not Detected</span>
-                </div>
-                <p className="text-slate-300 leading-relaxed">
-                  Repo scanning requires the Git command-line tool. Install from{' '}
-                  <a
-                    href="https://git-scm.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-cyan-400 underline font-semibold"
-                  >
-                    git-scm.com
-                  </a>{' '}
-                  and ensure it is in your PATH.
-                </p>
-              </div>
-            )}
-          </div>
-          <div className="pt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
-            <span className="font-medium text-slate-300">Optional accuracy integrations:</span>
-            <span>AbuseIPDB: {systemStatus.abuseipdb ? 'Configured' : 'Unconfigured (Optional, improves accuracy)'}</span>
-            <span>VirusTotal: {systemStatus.virustotal ? 'Configured' : 'Unconfigured (Optional, improves accuracy)'}</span>
-            <span>GitHub Token: {systemStatus.githubToken ? 'Configured' : 'Unconfigured (Optional, improves rate limits)'}</span>
-          </div>
-        </div>
-      )}
-
       {/* Top Banner: Includes demo data / Based on real scans */}
       {demoModules.length > 0 ? (
         <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">

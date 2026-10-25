@@ -10,15 +10,17 @@
 
 **Our Solution:**  
 ABI is a consumer-focused, web-based cybersecurity investigation platform. It provides a multi-vector investigation across three primary channels:
-1. **Telegram Account Forensics:** Direct MTProto read-only audit to detect unauthorized devices, physically impossible travel, and missing 2-step verification.
+1. **Telegram Account Forensics:** Forensic log analysis of user-uploaded Telegram Desktop data exports (`sessions.json`/HTML, service notifications) to detect unauthorized devices, physically impossible travel, Tor/VPN connections, rapid login bursts, and dormant sessions with zero Telegram API keys required.
 2. **GitHub Repository Security:** AST and pattern scanning for hardcoded secrets, API tokens, and vulnerable package dependencies.
 3. **Network & Web Infrastructure:** Real-time IP threat intelligence, Tor exit node detection, SSL certificate expiry checks, open port probing, and HTTP security header evaluation.
 
 **Central Innovation — The Risk Synthesis Engine:**  
-Rather than presenting disjointed tables of raw data, a stateless Risk Engine aggregates findings, computes a composite score, drafts a plain-English attack story ("How It Likely Happened"), and produces a prioritized, de-duplicated 10-step recovery plan ("What To Do Now").
+Rather than presenting disjointed tables of raw data, a centralized Risk Engine aggregates findings, computes a composite score, drafts a plain-English attack story ("How It Likely Happened"), and produces a prioritized, de-duplicated 10-step recovery plan ("What To Do Now").
 
-**Zero-Storage Privacy Architecture:**  
-The backend is completely stateless. No phone numbers, passwords, OTPs, session strings, or chat contents are saved to disk or database. MTProto sessions exist solely in memory and are immediately terminated (`client.log_out()`) upon audit completion.
+**Privacy & Security Architecture:**  
+- **Zero Raw File Storage & Instant Redaction:** Uploaded Telegram export files are parsed purely in volatile RAM (`io.BytesIO`) and discarded in a `finally` block. Raw files and raw message text are never stored. All OTP verification codes are immediately redacted to `****`. Personal chats are filtered out and ignored.
+- **Defensive Zip Handling:** Zip archives are protected against Zip Slip (path traversal), nested zip exploitation, and decompression bombs (capped at 200 entries and 50 MB uncompressed).
+- **Authentication & RBAC:** SQLite database (`app.db`) stores user accounts with `bcrypt` password hashes, JWT authorization tokens, and immutable audit logs (`activity_log`).
 
 ---
 
@@ -55,17 +57,23 @@ $$\text{Composite Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5
    - Caches and compares session IPs against the live official Tor Project directory (`https://check.torproject.org/torbulkexitlist`).
 8. **Server-Side Request Forgery (SSRF) Protection:**
    - Resolves all user-supplied hostnames to IPs and rejects private (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16`), and carrier-grade NAT ranges across every hop.
-9. **In-Memory Rate Limiting:**
-   - Sliding window rate limiting per client IP (3 requests / 10 min on SMS login; 10–20 requests / min on general endpoints) to prevent resource abuse and API flooding.
+9. **Safe In-Memory File & Archive Parsing:**
+   - Zip Slip mitigation by validating `os.path.commonpath([target, dest]) == dest`.
+   - Zip bomb mitigation (max 200 files, max 50 MB total uncompressed, 10 MB per file, max depth 20 in JSON).
+   - Read-only BeautifulSoup parsing to prevent HTML injection and XSS execution during file inspection.
+10. **Application Security & RBAC:**
+    - Bcrypt password hashing with unique salts.
+    - JWT signing with SHA-256 for stateless session authorization.
+    - Role-based authorization middleware protecting Admin API endpoints.
+    - IP-based sliding window rate limiting (5 req/min on `/login`, 10–20 req/min on scan routes).
 
 ---
 
 ## 4. System Limitations
 
-1. **Static Analysis Only:** The repository checker analyzes code patterns, dependencies, and regex entropy; it does not perform dynamic runtime execution or sandbox testing.
-2. **External Key Dependency:** Without configured keys (`ABUSEIPDB_KEY`, `VIRUSTOTAL_KEY`), IP and link reputation scores rely on proxy/hosting heuristics and domain age rather than global threat feeds.
-3. **Stateless Scope:** Because the system preserves zero database state, it cannot correlate user incidents across weeks or provide background 24/7 continuous monitoring.
-4. **Telegram API Constraints:** Telegram's MTProto API enforces strict `FloodWait` protections; repeated code requests can trigger temporary account cooldowns imposed by Telegram.
+1. **Static & Heuristic Analysis Only:** The repository checker analyzes code patterns, dependencies, and regex entropy; it does not perform dynamic runtime execution or sandbox testing.
+2. **Snapshot Export Limitations:** Offline Telegram exports represent point-in-time snapshots and cannot query live 2FA settings or revoke sessions in real time. The report explicitly highlights manual steps the user should verify.
+3. **External Key Dependency:** Without configured keys (`ABUSEIPDB_KEY`, `VIRUSTOTAL_KEY`), IP and link reputation scores rely on proxy/hosting heuristics and domain age rather than global threat feeds.
 
 ---
 
@@ -77,11 +85,11 @@ $$\text{Composite Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5
 ### Q2: What is the math behind your overall risk score?
 **Answer:** We use the formula $\text{Overall} = 0.5 \times \max(\text{Scores}) + 0.5 \times \text{mean}(\text{Scores})$. The maximum score prevents severe, high-confidence compromise indicators from being diluted by clean modules, while the average reflects general security hygiene. Furthermore, any Critical finding automatically sets the overall threat level to at least High.
 
-### Q3: How do you guarantee user privacy during Telegram authentication?
-**Answer:** The application is strictly stateless. We use Telethon with in-memory `StringSession` objects in RAM. No phone numbers, passwords, or session tokens are ever written to disk. In a mandatory `finally` block in `analyze_telegram_account`, we call `await client.log_out()` to terminate the session on Telegram's servers and delete the client from memory.
+### Q3: Why did you switch from live Telegram MTProto login to log export analysis?
+**Answer:** Live MTProto authentication required end users or developers to register on `my.telegram.org` to obtain `API_ID` and `API_HASH`, which created friction. More importantly, entering phone numbers and OTP codes into web forms poses severe phishing risks and triggers Telegram `FloodWait` bans. Analyzing official Telegram Desktop export files provides rich forensic data (sessions, IPs, devices, service alerts) completely offline without credential exposure or API dependencies.
 
-### Q4: Does the tool read the user's private messages on Telegram?
-**Answer:** No. The module is restricted to forensic metadata: active authorizations via `GetAuthorizationsRequest`, 2-step verification status via `GetPasswordRequest`, and login alerts from Telegram's official service notifications account (User ID `777000`). It never queries user chats, group chats, contacts, or media.
+### Q4: Does the tool read or store the user's private messages or OTP codes?
+**Answer:** Absolutely not. Uploaded exports are parsed strictly in memory and discarded in a `finally` block. Personal chat files are completely ignored. For official service chat notifications (ID 777000), all OTP and verification numbers are immediately redacted (`****`) via regex before any parsing. Only sanitized metadata (device, location, date) is processed, and zero raw files or message texts reach the database.
 
 ### Q5: What is Server-Side Request Forgery (SSRF), and how did you prevent it?
 **Answer:** SSRF occurs when an attacker tricks a backend server into requesting internal or sensitive network resources (e.g., `http://169.254.169.254/latest/meta-data` or `http://localhost:8000`). We resolve target domains to IP addresses before initiating requests and reject private, loopback, link-local, multicast, and carrier-grade NAT addresses. We re-validate this check on every redirect hop.
@@ -96,13 +104,13 @@ $$\text{Composite Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5
 **Answer:** We clone repositories with `--depth 1` into isolated temporary directories and scan text files using regular expressions with high-entropy pattern matching for AWS keys, GitHub tokens, Slack webhooks, Stripe keys, and private SSH keys. We never execute the code, and we sanitize temporary folders immediately after analysis.
 
 ### Q9: Why is the backend built in Python FastAPI while the frontend is Vite + React?
-**Answer:** Python is the industry standard for cybersecurity and networking due to mature libraries like `telethon` (MTProto), `dnspython`, `httpx`, and `python-whois`. FastAPI provides asynchronous concurrency and Pydantic validation. React with TypeScript provides a snappy, responsive UI with client-side PDF compilation via `html2canvas` and `jsPDF`.
+**Answer:** Python is the industry standard for cybersecurity and forensics due to mature libraries like `dnspython`, `httpx`, `beautifulsoup4`, and `bcrypt`. FastAPI provides high-speed asynchronous concurrency and Pydantic validation. React with TypeScript provides a snappy, responsive UI with client-side PDF compilation via `html2canvas` and `jsPDF`.
 
 ### Q10: What happens if an attacker enters a very large JSON payload to exhaust server memory?
-**Answer:** In `backend/routers/report.py`, we enforce a hard 1 MB cap on the request body. If the `Content-Length` or the actual body stream exceeds 1 MB, the server immediately rejects the request with HTTP `413 Payload Too Large`.
+**Answer:** In `backend/routers/report.py`, we enforce a hard 1 MB cap on the request body. If the `Content-Length` or the actual body stream exceeds 1 MB, the server immediately rejects the request with HTTP `413 Payload Too Large`. Similarly, uploaded zip files are capped at 10 MB per file, 25 MB total, and 50 MB uncompressed.
 
-### Q11: How do you handle Telegram accounts that have Two-Step Verification enabled?
-**Answer:** If `client.sign_in()` raises a `SessionPasswordNeededError`, the backend returns HTTP 401 with `{"needsPassword": true}`. The frontend dynamically reveals a cloud password input field. The password is submitted temporarily to authenticate and is never stored.
+### Q11: How do you handle Telegram Two-Step Verification (2FA) status in log export mode?
+**Answer:** Offline export files do not contain a flag indicating whether 2FA is currently active. The application never claims 2FA is enabled or disabled. Instead, it generates a clear "Manual Verification Needed" finding explaining what offline logs cannot show and providing step-by-step instructions on how the user can check and enable 2FA directly inside the official app.
 
 ### Q12: Why are public DNS resolvers like 8.8.8.8 not flagged as VPNs?
 **Answer:** Datacenter IP heuristics can mistakenly label public infrastructure as proxies. We maintain an allowlist for known public resolvers (Google `8.8.8.8`, Cloudflare `1.1.1.1`), and we treat `isHosting` as a separate flag from `isVpn` and `isProxy`, only raising suspicion if ip-api or threat feeds explicitly flag anonymizer activity.
@@ -110,8 +118,8 @@ $$\text{Composite Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5
 ### Q13: Why is a missing HSTS header labeled "Safe" or "Low" instead of "Suspicious"?
 **Answer:** Missing HTTP hardening headers represent weak configuration, not an active attack or malicious website. Labeling popular sites like Google as "Suspicious" due to missing headers is a false positive that harms user trust. Threat verdicts ("Suspicious" / "Dangerous") are reserved for expired SSL certificates, hostile open ports, or active malware flags.
 
-### Q14: How does rate limiting work across the application?
-**Answer:** We built in-memory sliding-window rate limiters grouped by client IP (`request.client.host`). `/api/telegram/send-code` is restricted to 3 requests per 10 minutes to prevent SMS abuse, while other endpoints allow 10–20 requests per minute. Exceeding the threshold returns HTTP `429 Too Many Requests`.
+### Q14: How does authentication and access control work in the platform?
+**Answer:** Users register with an email and password (minimum 8 characters). Passwords are hashed using `bcrypt`. Successful logins return a signed JWT token stored in memory/session storage. Protected endpoints validate the bearer token via FastAPI dependencies. An Admin role provides access to the `/admin` portal for platform metrics, user management, and audit logs.
 
-### Q15: How does the application function if external APIs (AbuseIPDB, VirusTotal, Telegram) are missing or offline?
-**Answer:** The architecture is designed to fail gracefully. If Telegram API keys are missing, the endpoint returns HTTP 503, and the frontend automatically offers a realistic **Demo Mode** with a prominent warning banner. If threat intelligence keys are absent, the network module computes heuristic threat scores from open ports and proxy indicators, noting the limitation in the final report.
+### Q15: How does the application function if external APIs (AbuseIPDB, VirusTotal) are missing or offline?
+**Answer:** The architecture is designed to fail gracefully. If threat intelligence keys are absent, the network module computes heuristic threat scores from open ports, domain age, and proxy indicators, noting the limitation in the final report. Core scanning (repo analysis, Telegram log analysis, network probes) functions completely without paid third-party APIs.

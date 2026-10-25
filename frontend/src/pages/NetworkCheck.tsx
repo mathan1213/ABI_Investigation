@@ -90,7 +90,7 @@ function isPrivateOrLoopback(target: string): boolean {
 }
 
 export const NetworkCheck: React.FC = () => {
-  const { networkScan, setIpScan, setLinkScan, setWebsiteScan, addToast, systemStatus } = useScan();
+  const { networkScan, setIpScan, setLinkScan, setWebsiteScan, addToast } = useScan();
   const [activeTab, setActiveTab] = useState<'ip' | 'link' | 'website'>('ip');
 
   // Form states - empty defaults in real data mode
@@ -228,26 +228,6 @@ export const NetworkCheck: React.FC = () => {
           Identify hackers hiding behind Tor or VPN proxies, uncover fake phishing links, and check your server for exposed open ports.
         </p>
       </div>
-
-      {/* Optional Threat Intel Status Info */}
-      {systemStatus && (!systemStatus.abuseipdb || !systemStatus.virustotal) && (
-        <div className="max-w-2xl mx-auto p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Sparkles size={14} className="text-cyan-400 shrink-0" />
-            <span>
-              Threat Intelligence:{' '}
-              {!systemStatus.abuseipdb && !systemStatus.virustotal
-                ? 'Running on native heuristics & public registries.'
-                : !systemStatus.abuseipdb
-                ? 'AbuseIPDB unconfigured; using native IP heuristics.'
-                : 'VirusTotal unconfigured; using DNS & SSL analysis.'}
-            </span>
-          </div>
-          <span className="text-slate-500 font-medium shrink-0 hidden sm:inline">
-            Optional keys in backend/.env improve accuracy
-          </span>
-        </div>
-      )}
 
       {/* Tabs Selector */}
       <div className="flex justify-center">

@@ -48,7 +48,7 @@ const EXAMPLE_REPOS = [
 ];
 
 export const RepoCheck: React.FC = () => {
-  const { repoScan, setRepoScan, addToast, systemStatus } = useScan();
+  const { repoScan, setRepoScan, addToast } = useScan();
   const [repoUrl, setRepoUrl] = useState(repoScan ? repoScan.repoUrl : '');
   const [isScanning, setIsScanning] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -167,28 +167,6 @@ export const RepoCheck: React.FC = () => {
 
       {/* Input Box Card */}
       <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 space-y-4">
-        {systemStatus && !systemStatus.gitInstalled && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-2">
-            <div className="flex items-center gap-2 font-bold text-amber-300">
-              <AlertCircle size={16} className="shrink-0" />
-              <span>Git CLI Required</span>
-            </div>
-            <p className="text-slate-300 leading-relaxed">
-              Git was not detected on the backend host. Repository inspection requires the Git CLI to clone code safely.
-              Please install Git from{' '}
-              <a
-                href="https://git-scm.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-cyan-400 hover:underline font-semibold"
-              >
-                git-scm.com
-              </a>{' '}
-              and ensure it is added to your system PATH.
-            </p>
-          </div>
-        )}
-
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">
             Public GitHub Repository URL
