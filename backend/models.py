@@ -169,8 +169,11 @@ class TelegramSession(AppBaseModel):
     id: str
     device: str
     app: str
+    platform: Optional[str] = ""
     ip: str
     country: str
+    region: Optional[str] = ""
+    created_at: Optional[str] = Field(default=None, alias="createdAt")
     last_active: str = Field(..., alias="lastActive")
     is_suspicious: bool = Field(..., alias="isSuspicious")
     is_current: Optional[bool] = Field(default=None, alias="isCurrent")

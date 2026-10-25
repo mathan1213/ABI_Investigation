@@ -163,6 +163,7 @@ async def test_non_service_chat_ignored(mock_network_tools):
         # Should return 422 because personal chat was completely ignored and no valid telegram data exists!
         assert resp.status_code == 422
         assert "No recognizable Telegram export data" in resp.json()["detail"]
+        assert "This looks like a personal chat export" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -289,3 +290,170 @@ async def test_oversize_file_rejected():
         resp = await ac.post("/api/telegram/logs/analyze", files=files)
         assert resp.status_code == 400
         assert "exceeds the maximum allowed size" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Format Tolerance Fixtures & Tests (Requirement 7)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def nested_sessions_fixture():
+    """Format variant 1: nested 'sessions': {'list': [...]} with web_sessions."""
+    return {
+        "about": "Telegram account export",
+        "sessions": {
+            "about": "This page lists your active Telegram sessions.",
+            "list": [
+                {
+                    "device_model": "PC 64bit",
+                    "platform": "Windows 11",
+                    "system_version": "10.0.22631",
+                    "application_name": "Telegram Desktop",
+                    "application_version": "4.16.8",
+                    "ip": "203.0.113.195",
+                    "country": "India",
+                    "region": "Maharashtra",
+                    "created": "2024-01-10 14:20:00",
+                    "last_active": "2024-01-15 18:30:00"
+                }
+            ]
+        },
+        "web_sessions": {
+            "about": "Web sessions list",
+            "list": [
+                {
+                    "platform": "Chrome for Windows",
+                    "browser": "Chrome",
+                    "ip": "203.0.113.196",
+                    "country": "India",
+                    "region": "Maharashtra",
+                    "created": "2024-01-11 10:00:00",
+                    "last_active": "2024-01-15 19:00:00"
+                }
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def flat_sessions_fixture():
+    """Format variant 2: flat 'sessions' list."""
+    return {
+        "sessions": [
+            {
+                "device": "Android Phone",
+                "app": "Telegram Android",
+                "platform": "Android 14",
+                "ip": "198.51.100.5",
+                "country": "India",
+                "date_created": "2024-02-01T12:00:00Z",
+                "date_active": "2024-02-05T16:00:00Z"
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def toplevel_list_fixture():
+    """Format variant 3: top-level list of session dictionaries."""
+    return [
+        {
+            "device_model": "MacBook Pro M3",
+            "application_name": "Telegram macOS",
+            "platform": "macOS 14.4",
+            "ip": "192.0.2.45",
+            "country": "India",
+            "created": 1705000000,
+            "last_active": 1705100000
+        }
+    ]
+
+
+@pytest.fixture
+def bom_prefixed_fixture(nested_sessions_fixture):
+    """Format variant 4: UTF-8 BOM-prefixed export file."""
+    raw_json = json.dumps(nested_sessions_fixture).encode("utf-8")
+    return b"\xef\xbb\xbf" + raw_json
+
+
+@pytest.fixture
+def no_sessions_fixture():
+    """Export file containing no sessions or service chat."""
+    return {
+        "about": "Here is the data you requested from Telegram.",
+        "user_id": 12345678,
+        "personal_information": {
+            "first_name": "Alice",
+            "phone_number": "+1234567890"
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_nested_sessions_format(nested_sessions_fixture, mock_network_tools):
+    file_bytes = json.dumps(nested_sessions_fixture).encode("utf-8")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        files = [("files", ("result.json", file_bytes, "application/json"))]
+        resp = await ac.post("/api/telegram/logs/analyze", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["sessions"]) == 2  # 1 native session + 1 web session
+        assert data["sessions"][0]["device"] == "PC 64bit"
+        assert data["sessions"][0]["app"] == "Telegram Desktop"
+        assert data["sessions"][0]["platform"] == "Windows 11"
+        assert data["sessions"][0]["country"] == "India"
+        assert data["sessions"][0]["region"] == "Maharashtra"
+        assert data["sessions"][0]["createdAt"] is not None
+        assert data["sessions"][0]["lastActive"] is not None
+
+
+@pytest.mark.asyncio
+async def test_flat_sessions_format(flat_sessions_fixture, mock_network_tools):
+    file_bytes = json.dumps(flat_sessions_fixture).encode("utf-8")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        files = [("files", ("sessions.json", file_bytes, "application/json"))]
+        resp = await ac.post("/api/telegram/logs/analyze", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["sessions"]) == 1
+        assert data["sessions"][0]["device"] == "Android Phone"
+        assert data["sessions"][0]["app"] == "Telegram Android"
+
+
+@pytest.mark.asyncio
+async def test_toplevel_list_format(toplevel_list_fixture, mock_network_tools):
+    file_bytes = json.dumps(toplevel_list_fixture).encode("utf-8")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        files = [("files", ("sessions_list.json", file_bytes, "application/json"))]
+        resp = await ac.post("/api/telegram/logs/analyze", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["sessions"]) == 1
+        assert data["sessions"][0]["device"] == "MacBook Pro M3"
+        assert data["sessions"][0]["app"] == "Telegram macOS"
+
+
+@pytest.mark.asyncio
+async def test_bom_prefixed_format(bom_prefixed_fixture, mock_network_tools):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        files = [("files", ("result.json", bom_prefixed_fixture, "application/json"))]
+        resp = await ac.post("/api/telegram/logs/analyze", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["sessions"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_sessions_returns_improved_422_with_keys(no_sessions_fixture):
+    file_bytes = json.dumps(no_sessions_fixture).encode("utf-8")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        files = [("files", ("result.json", file_bytes, "application/json"))]
+        resp = await ac.post("/api/telegram/logs/analyze", files=files)
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "No recognizable Telegram export data" in detail
+        assert "about" in detail
+        assert "personal_information" in detail
+        assert "user_id" in detail
+        assert "This file has no session list" in detail
+

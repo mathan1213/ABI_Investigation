@@ -2,6 +2,7 @@ import io
 import re
 import json
 import zipfile
+import logging
 import datetime
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -18,6 +19,8 @@ from models import (
     RiskLevel
 )
 from modules.network_module import inspect_ip, inspect_link, is_safe_ip
+
+logger = logging.getLogger("telegram_log_parser")
 
 # Limits
 MAX_FILES = 5
@@ -47,6 +50,60 @@ OFFICIAL_APP_KEYWORDS = [
     "telegram for windows",
 ]
 
+# Set of normalized key names (lowercase, stripped of spaces, underscores, and hyphens)
+# A dict counts as a session if it has at least 2 keys from this set.
+SESSION_KEY_SET = {
+    "device",
+    "devicemodel",
+    "devicename",
+    "model",
+    "platform",
+    "systemversion",
+    "system",
+    "application",
+    "applicationname",
+    "appname",
+    "appversion",
+    "applicationversion",
+    "app",
+    "lastip",
+    "ip",
+    "ipaddress",
+    "lastcountry",
+    "country",
+    "location",
+    "region",
+    "lastregion",
+    "lastactive",
+    "dateactive",
+    "datelastactive",
+    "lastseen",
+    "active",
+    "date",
+    "datecreated",
+    "created",
+    "createdat",
+    "browser",
+}
+
+
+def _normalize_key(k: Any) -> str:
+    """Normalizes key name: lowercase, stripping spaces, underscores and hyphens."""
+    return re.sub(r"[\s_\-]+", "", str(k).lower())
+
+
+def is_session_dict(d: Any) -> bool:
+    """A dict counts as a session if it has at least two keys from SESSION_KEY_SET."""
+    if not isinstance(d, dict):
+        return False
+    matched = 0
+    for k in d.keys():
+        if _normalize_key(k) in SESSION_KEY_SET:
+            matched += 1
+            if matched >= 2:
+                return True
+    return False
+
 
 def redact_sensitive_codes(text: str) -> str:
     """Immediately masks login codes and 4-8 digit numeric sequences to ****."""
@@ -71,9 +128,16 @@ def check_json_depth(obj: Any, current_depth: int = 0, max_depth: int = MAX_JSON
 
 
 def parse_date_robust(date_val: Any) -> Optional[datetime.datetime]:
-    """Parses various date and timestamp formats into UTC datetime."""
+    """
+    Parses various date and timestamp formats into UTC datetime.
+    Supports epoch seconds, epoch milliseconds, ISO strings, and Telegram's 'YYYY-MM-DD HH:MM:SS'.
+    """
     if not date_val:
         return None
+    if isinstance(date_val, datetime.datetime):
+        if date_val.tzinfo is None:
+            return date_val.replace(tzinfo=datetime.timezone.utc)
+        return date_val
     if isinstance(date_val, (int, float)):
         # Support milliseconds or seconds
         if date_val > 1e11:
@@ -86,6 +150,15 @@ def parse_date_robust(date_val: Any) -> Optional[datetime.datetime]:
         date_str = date_val.strip()
         if not date_str:
             return None
+        # Support numeric string timestamps
+        if date_str.isdigit():
+            try:
+                val = float(date_str)
+                if val > 1e11:
+                    val = val / 1000.0
+                return datetime.datetime.fromtimestamp(val, tz=datetime.timezone.utc)
+            except Exception:
+                pass
         try:
             dt = dateutil.parser.parse(date_str)
             if dt.tzinfo is None:
@@ -101,6 +174,255 @@ def is_official_app(app_name: str) -> bool:
         return False
     app_lower = app_name.strip().lower()
     return any(official in app_lower for official in OFFICIAL_APP_KEYWORDS)
+
+
+def normalize_session_entry(item: dict) -> Optional[dict]:
+    """
+    Normalizes a session dictionary to one internal shape:
+    (device, app, platform, ip, country, region, createdAt, lastActive).
+    Accepts epoch seconds, ISO strings, and Telegram's 'YYYY-MM-DD HH:MM:SS' format.
+    """
+    if not isinstance(item, dict):
+        return None
+
+    k_map: dict[str, Any] = {_normalize_key(k): v for k, v in item.items() if v is not None}
+
+    # 1. Device
+    device = (
+        k_map.get("devicemodel")
+        or k_map.get("device")
+        or k_map.get("devicename")
+        or k_map.get("model")
+        or ""
+    )
+
+    # 2. App
+    app = (
+        k_map.get("applicationname")
+        or k_map.get("appname")
+        or k_map.get("application")
+        or k_map.get("app")
+        or ""
+    )
+
+    # 3. Platform
+    platform = (
+        k_map.get("platform")
+        or k_map.get("systemversion")
+        or k_map.get("system")
+        or ""
+    )
+
+    # 4. IP
+    ip = (
+        k_map.get("lastip")
+        or k_map.get("ip")
+        or k_map.get("ipaddress")
+        or ""
+    )
+
+    # 5. Country
+    country = (
+        k_map.get("lastcountry")
+        or k_map.get("country")
+        or k_map.get("location")
+        or "Unknown"
+    )
+
+    # 6. Region
+    region = (
+        k_map.get("lastregion")
+        or k_map.get("region")
+        or ""
+    )
+
+    # Fallback inference for web sessions or sparse dicts
+    browser = k_map.get("browser")
+    if not device:
+        if browser:
+            device = f"Web Browser ({browser})"
+        elif platform:
+            device = f"{platform} Device"
+        else:
+            device = "Unknown Device"
+
+    if not app:
+        if browser or (platform and "web" in str(platform).lower()):
+            app = f"Telegram Web ({browser})" if browser else "Telegram Web"
+        else:
+            app = "Telegram Client"
+
+    # 7. createdAt
+    created_raw = (
+        k_map.get("datecreated")
+        or k_map.get("created")
+        or k_map.get("createdat")
+    )
+    created_dt = parse_date_robust(created_raw)
+
+    # 8. lastActive
+    last_active_raw = (
+        k_map.get("lastactive")
+        or k_map.get("dateactive")
+        or k_map.get("datelastactive")
+        or k_map.get("lastseen")
+        or k_map.get("active")
+        or k_map.get("date")
+    )
+    last_active_dt = parse_date_robust(last_active_raw)
+    if not last_active_dt:
+        last_active_dt = datetime.datetime.now(datetime.timezone.utc)
+
+    is_current = bool(k_map.get("iscurrent") or k_map.get("current"))
+
+    return {
+        "device": str(device).strip(),
+        "app": str(app).strip(),
+        "platform": str(platform).strip(),
+        "ip": str(ip).strip(),
+        "country": str(country).strip(),
+        "region": str(region).strip(),
+        "createdAt": created_dt,
+        "lastActive": last_active_dt,
+        # Backward compatibility aliases
+        "created": created_dt,
+        "last_active": last_active_dt,
+        "is_current": is_current,
+    }
+
+
+def extract_sessions_recursive(data: Any, depth: int = 0, max_depth: int = MAX_JSON_DEPTH) -> list[dict]:
+    """
+    Recursively searches parsed JSON for lists of session dictionaries.
+    A dict counts as a session if it has at least two keys from SESSION_KEY_SET
+    (case-insensitive, ignoring underscores and spaces).
+    Accepts sessions under any key name (sessions, list, active_sessions, authorizations, web_sessions, etc.)
+    or as a top-level list.
+    """
+    if depth > max_depth or not data:
+        return []
+
+    collected: list[dict] = []
+
+    if isinstance(data, list):
+        for item in data:
+            if is_session_dict(item):
+                normalized = normalize_session_entry(item)
+                if normalized:
+                    collected.append(normalized)
+            elif isinstance(item, (dict, list)):
+                collected.extend(extract_sessions_recursive(item, depth + 1, max_depth))
+    elif isinstance(data, dict):
+        if is_session_dict(data):
+            norm = normalize_session_entry(data)
+            if norm:
+                collected.append(norm)
+                return collected
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                collected.extend(extract_sessions_recursive(v, depth + 1, max_depth))
+
+    return collected
+
+
+def parse_service_chat_messages(messages: list, out: "ParsedRawData", filename_hint: str) -> None:
+    """Parses messages from official Telegram service chat, redacting codes and collecting login alerts."""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+
+        raw_text = msg.get("text", "")
+        # Text can sometimes be a list of mixed strings/dicts in Telegram export
+        if isinstance(raw_text, list):
+            text_parts = []
+            for part in raw_text:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict) and "text" in part:
+                    text_parts.append(str(part["text"]))
+            combined_text = " ".join(text_parts)
+        else:
+            combined_text = str(raw_text)
+
+        # IMMEDIATE REDACTION OF ALL CODES
+        redacted_text = redact_sensitive_codes(combined_text)
+        date_dt = parse_date_robust(msg.get("date") or msg.get("date_unixtime"))
+
+        # Check for service chat URLs
+        found_urls = URL_PATTERN.findall(redacted_text)
+        for u in found_urls:
+            if u not in out.service_urls and len(out.service_urls) < 5:
+                out.service_urls.append(u)
+
+        lower_text = redacted_text.lower()
+
+        # Check if it's a login code notification
+        if "login code" in lower_text or "web login code" in lower_text or "code: ****" in lower_text:
+            if date_dt:
+                out.login_code_events.append(date_dt)
+
+        # Check if it's a new login alert
+        if any(marker in lower_text for marker in ("login alert", "new login", "we detected a login", "signed in", "device:")):
+            device_match = re.search(r"device[:\s]+([^\n,]+)", redacted_text, re.IGNORECASE)
+            location_match = re.search(r"(?:location|country)[:\s]+([^\n,]+)", redacted_text, re.IGNORECASE)
+            ip_match = IP_PATTERN.search(redacted_text)
+
+            device = device_match.group(1).strip() if device_match else "Unknown Device"
+            location = location_match.group(1).strip() if location_match else "Unknown Location"
+            ip = ip_match.group(0) if ip_match else ""
+
+            out.login_alerts.append({
+                "device": device,
+                "location": location,
+                "ip": ip,
+                "date": date_dt or datetime.datetime.now(datetime.timezone.utc),
+                "summary": f"Login alert for {device} ({location})"
+            })
+
+
+def extract_service_chats_recursive(
+    data: Any,
+    out: "ParsedRawData",
+    filename_hint: str,
+    depth: int = 0,
+    max_depth: int = MAX_JSON_DEPTH
+) -> bool:
+    """
+    Recursively finds official Telegram service chat (id 777000 or name 'Telegram')
+    and ignores non-service chats.
+    """
+    if depth > max_depth or not data:
+        return False
+
+    found_any = False
+
+    if isinstance(data, dict):
+        chat_id = str(data.get("id", ""))
+        chat_name = str(data.get("name", "")).strip().lower()
+        messages = data.get("messages")
+
+        if isinstance(messages, list):
+            # It's a chat!
+            is_service = (chat_id == "777000" or chat_name == "telegram")
+            if is_service:
+                out.has_service_chat_file = True
+                out.recognized_sources.append(f"Official Telegram Service Chat (JSON: {filename_hint})")
+                parse_service_chat_messages(messages, out, filename_hint)
+                found_any = True
+            else:
+                out.ignored_non_service_chats += 1
+        else:
+            for k, v in data.items():
+                if isinstance(v, (dict, list)):
+                    if extract_service_chats_recursive(v, out, filename_hint, depth + 1, max_depth):
+                        found_any = True
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                if extract_service_chats_recursive(item, out, filename_hint, depth + 1, max_depth):
+                    found_any = True
+
+    return found_any
 
 
 class ParsedRawData:
@@ -169,153 +491,12 @@ def safe_unzip(content_bytes: bytes) -> list[tuple[str, bytes]]:
     return files
 
 
-def parse_session_entry(item: dict) -> Optional[dict]:
-    """Extracts session fields tolerating field-name variants."""
-    if not isinstance(item, dict):
-        return None
-
-    device = item.get("device_model") or item.get("device") or item.get("device_name") or item.get("model") or "Unknown Device"
-    app = item.get("application_name") or item.get("app_name") or item.get("app") or item.get("application") or "Unknown App"
-    platform = item.get("platform") or item.get("system_version") or item.get("system") or ""
-    ip = item.get("ip") or item.get("last_ip") or item.get("ip_address") or ""
-    country = item.get("country") or item.get("last_country") or item.get("location") or "Unknown"
-    
-    last_active_raw = item.get("last_active") or item.get("date_active") or item.get("date_last_active") or item.get("last_seen") or item.get("date")
-    created_raw = item.get("date_created") or item.get("created") or item.get("created_at")
-
-    last_active_dt = parse_date_robust(last_active_raw)
-    created_dt = parse_date_robust(created_raw)
-
-    return {
-        "device": str(device).strip(),
-        "app": str(app).strip(),
-        "platform": str(platform).strip(),
-        "ip": str(ip).strip(),
-        "country": str(country).strip(),
-        "last_active": last_active_dt or datetime.datetime.now(datetime.timezone.utc),
-        "created": created_dt,
-        "is_current": bool(item.get("is_current") or item.get("current")),
-    }
-
-
-def parse_sessions_json(data: Any, out: ParsedRawData, filename_hint: str) -> bool:
-    """Attempts to parse active sessions from a parsed JSON object."""
-    sessions_list = []
-    if isinstance(data, dict):
-        if "sessions" in data and isinstance(data["sessions"], list):
-            sessions_list = data["sessions"]
-        elif "active_sessions" in data and isinstance(data["active_sessions"], list):
-            sessions_list = data["active_sessions"]
-        elif "about" in data and isinstance(data["about"], dict) and "sessions" in data["about"]:
-            sessions_list = data["about"]["sessions"]
-    elif isinstance(data, list):
-        # Could be directly a list of session objects
-        if data and isinstance(data[0], dict) and any(k in data[0] for k in ("device_model", "application_name", "last_active", "ip", "country")):
-            sessions_list = data
-
-    if sessions_list:
-        parsed_any = False
-        for s in sessions_list:
-            parsed = parse_session_entry(s)
-            if parsed:
-                out.sessions.append(parsed)
-                parsed_any = True
-        if parsed_any:
-            out.has_sessions_file = True
-            out.recognized_sources.append(f"Active Sessions (JSON: {filename_hint})")
-            return True
-    return False
-
-
-def parse_service_chat_json(data: Any, out: ParsedRawData, filename_hint: str) -> bool:
-    """
-    Parses official Telegram service chat JSON export (id 777000 or name 'Telegram').
-    Ignores non-service chats and redacts login codes immediately.
-    """
-    if not isinstance(data, dict):
-        return False
-
-    chat_id = str(data.get("id", ""))
-    chat_name = str(data.get("name", "")).strip().lower()
-
-    # Verify if it's the official service chat
-    is_service_chat = (chat_id == "777000" or chat_name == "telegram")
-    messages = data.get("messages")
-
-    if not isinstance(messages, list):
-        return False
-
-    # If it is a chat but NOT the service chat, ignore completely as requested!
-    if not is_service_chat:
-        out.ignored_non_service_chats += 1
-        return False
-
-    out.has_service_chat_file = True
-    out.recognized_sources.append(f"Official Telegram Service Chat (JSON: {filename_hint})")
-
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-
-        raw_text = msg.get("text", "")
-        # Text can sometimes be a list of mixed strings/dicts in Telegram export
-        if isinstance(raw_text, list):
-            text_parts = []
-            for part in raw_text:
-                if isinstance(part, str):
-                    text_parts.append(part)
-                elif isinstance(part, dict) and "text" in part:
-                    text_parts.append(str(part["text"]))
-            combined_text = " ".join(text_parts)
-        else:
-            combined_text = str(raw_text)
-
-        # IMMEDIATE REDACTION OF ALL CODES
-        redacted_text = redact_sensitive_codes(combined_text)
-        date_dt = parse_date_robust(msg.get("date") or msg.get("date_unixtime"))
-
-        # Check for service chat URLs
-        found_urls = URL_PATTERN.findall(redacted_text)
-        for u in found_urls:
-            if u not in out.service_urls and len(out.service_urls) < 5:
-                out.service_urls.append(u)
-
-        lower_text = redacted_text.lower()
-
-        # Check if it's a login code notification
-        if "login code" in lower_text or "web login code" in lower_text or "code: ****" in lower_text:
-            if date_dt:
-                out.login_code_events.append(date_dt)
-
-        # Check if it's a new login alert
-        if any(marker in lower_text for marker in ("login alert", "new login", "we detected a login", "signed in", "device:")):
-            # Extract device, location, IP from text or message fields
-            device_match = re.search(r"device[:\s]+([^\n,]+)", redacted_text, re.IGNORECASE)
-            location_match = re.search(r"(?:location|country)[:\s]+([^\n,]+)", redacted_text, re.IGNORECASE)
-            ip_match = IP_PATTERN.search(redacted_text)
-
-            device = device_match.group(1).strip() if device_match else "Unknown Device"
-            location = location_match.group(1).strip() if location_match else "Unknown Location"
-            ip = ip_match.group(0) if ip_match else ""
-
-            out.login_alerts.append({
-                "device": device,
-                "location": location,
-                "ip": ip,
-                "date": date_dt or datetime.datetime.now(datetime.timezone.utc),
-                "summary": f"Login alert for {device} ({location})"
-            })
-
-    return True
-
-
 def parse_html_content(html_str: str, out: ParsedRawData, filename_hint: str) -> bool:
     """Safely parses Telegram export HTML files using BeautifulSoup (read-only AST parsing)."""
     soup = BeautifulSoup(html_str, "html.parser")
     found_something = False
 
     # Check for Active Sessions in HTML
-    # Telegram Desktop sessions.html contains a list/table with session rows
     session_rows = soup.find_all(["tr", "div"], class_=lambda c: c and ("session" in c.lower() or "entry" in c.lower()))
     if not session_rows:
         # Check if table headers look like sessions
@@ -337,8 +518,7 @@ def parse_html_content(html_str: str, out: ParsedRawData, filename_hint: str) ->
                 app = cols[1]
                 ip_match = IP_PATTERN.search(text)
                 ip = ip_match.group(0) if ip_match else ""
-                
-                # Check for country/location keywords or last column
+
                 country = "Unknown"
                 last_active_dt = None
                 for col in cols[2:]:
@@ -348,24 +528,22 @@ def parse_html_content(html_str: str, out: ParsedRawData, filename_hint: str) ->
                     elif not ip_match or col != ip:
                         country = col
 
-                out.sessions.append({
+                normalized = normalize_session_entry({
                     "device": device or "Unknown Device",
                     "app": app or "Unknown App",
-                    "platform": "",
                     "ip": ip,
                     "country": country,
                     "last_active": last_active_dt or datetime.datetime.now(datetime.timezone.utc),
-                    "created": None,
-                    "is_current": False,
                 })
-                found_something = True
+                if normalized:
+                    out.sessions.append(normalized)
+                    found_something = True
 
         if found_something:
             out.has_sessions_file = True
             out.recognized_sources.append(f"Active Sessions (HTML: {filename_hint})")
 
-    # Check for Chat History (Telegram service chat or non-service chat)
-    # Check page title or header
+    # Check for Chat History
     title_tag = soup.find(["title", "h1", "div"], class_=lambda c: c and ("title" in c.lower() or "header" in c.lower()))
     title_text = title_tag.get_text(strip=True).lower() if title_tag else ""
 
@@ -373,7 +551,6 @@ def parse_html_content(html_str: str, out: ParsedRawData, filename_hint: str) ->
     if messages_divs:
         is_service_chat = ("telegram" in title_text)
         if not is_service_chat:
-            # Check if any messages say Telegram service notifications
             for m in messages_divs[:5]:
                 if "login alert" in m.get_text().lower() or "we detected a login" in m.get_text().lower():
                     is_service_chat = True
@@ -391,7 +568,6 @@ def parse_html_content(html_str: str, out: ParsedRawData, filename_hint: str) ->
                 date_str = date_tag.get_text(strip=True) if date_tag else date_attr
                 date_dt = parse_date_robust(date_str)
 
-                # Collect URLs
                 for u in URL_PATTERN.findall(msg_text):
                     if u not in out.service_urls and len(out.service_urls) < 5:
                         out.service_urls.append(u)
@@ -425,9 +601,13 @@ def parse_text_content(text: str, out: ParsedRawData, filename_hint: str) -> boo
         try:
             data = json.loads(clean_text)
             check_json_depth(data)
-            p1 = parse_sessions_json(data, out, filename_hint)
-            p2 = parse_service_chat_json(data, out, filename_hint)
-            return p1 or p2
+            sessions = extract_sessions_recursive(data)
+            chat_found = extract_service_chats_recursive(data, out, filename_hint)
+            if sessions:
+                out.sessions.extend(sessions)
+                out.has_sessions_file = True
+                out.recognized_sources.append(f"Active Sessions ({len(sessions)} found in {filename_hint})")
+            return bool(sessions or chat_found)
         except json.JSONDecodeError:
             pass
 
@@ -444,17 +624,16 @@ def parse_text_content(text: str, out: ParsedRawData, filename_hint: str) -> boo
             loc_m = re.search(r"(?:country|location)[:\s]+([^\n,;]+)", line_redacted, re.IGNORECASE)
 
             if dev_m or ip_m:
-                out.sessions.append({
+                norm = normalize_session_entry({
                     "device": dev_m.group(1).strip() if dev_m else "Unknown Device",
                     "app": app_m.group(1).strip() if app_m else "Telegram Desktop",
-                    "platform": "",
                     "ip": ip_m.group(0) if ip_m else "",
                     "country": loc_m.group(1).strip() if loc_m else "Unknown",
                     "last_active": datetime.datetime.now(datetime.timezone.utc),
-                    "created": None,
-                    "is_current": False
                 })
-                found = True
+                if norm:
+                    out.sessions.append(norm)
+                    found = True
 
     if found:
         out.has_sessions_file = True
@@ -465,8 +644,8 @@ def parse_text_content(text: str, out: ParsedRawData, filename_hint: str) -> boo
 async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> TelegramScanResult:
     """
     Main entry point for analyzing Telegram Desktop export files.
-    Enforces all security constraints, performs content detection, applies 8 detection rules,
-    and returns a structured TelegramScanResult.
+    Enforces security constraints, searches JSON recursively for sessions and service chat,
+    applies 8 detection rules, logs safe diagnostics at INFO level, and returns TelegramScanResult.
     """
     if not files or len(files) == 0:
         raise HTTPException(
@@ -482,9 +661,9 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
 
     parsed_data = ParsedRawData()
     total_upload_size = 0
+    discovered_keys_by_file: dict[str, list[str]] = {}
 
     try:
-        # Process each uploaded file in memory
         for upload_file in files:
             file_bytes = await upload_file.read()
             file_size = len(file_bytes)
@@ -502,67 +681,134 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
                     detail=f"Total upload size exceeds the maximum allowed limit of {MAX_TOTAL_BYTES // (1024*1024)} MB."
                 )
 
-            # Unpack zip in memory if content is a zip file (detect by header magic or zip extension)
+            # Unpack zip in memory if content is a zip file
             is_zip = file_bytes.startswith(b"PK\x03\x04") or (upload_file.filename and upload_file.filename.lower().endswith(".zip"))
-            
+
             extracted_items: list[tuple[str, bytes]] = []
             if is_zip:
                 extracted_items = safe_unzip(file_bytes)
             else:
                 extracted_items = [(upload_file.filename or "uploaded_file", file_bytes)]
 
-            # Analyze each file entry by CONTENT
+            # Analyze each extracted item
             for fname, content in extracted_items:
-                # Content-based detection
-                # 1. Try JSON
-                is_json = False
+                # 1. Read with utf-8-sig (BOM support) and fallback to utf-8 with errors='replace'
                 try:
-                    text_content = content.decode("utf-8")
-                except UnicodeDecodeError:
-                    try:
-                        text_content = content.decode("latin-1")
-                    except Exception:
-                        continue
+                    text_content = content.decode("utf-8-sig")
+                except Exception:
+                    text_content = content.decode("utf-8", errors="replace")
 
                 stripped = text_content.strip()
+                handled = False
+
+                # 2. Try JSON
                 if stripped.startswith("{") or stripped.startswith("["):
                     try:
                         json_data = json.loads(stripped)
                         check_json_depth(json_data)
-                        is_sessions = parse_sessions_json(json_data, parsed_data, fname)
-                        is_chat = parse_service_chat_json(json_data, parsed_data, fname)
-                        if is_sessions or is_chat:
-                            is_json = True
+
+                        top_keys: list[str] = []
+                        if isinstance(json_data, dict):
+                            top_keys = sorted(list(json_data.keys()))
+                            discovered_keys_by_file[fname] = top_keys
+                        elif isinstance(json_data, list):
+                            discovered_keys_by_file[fname] = [f"[list of {len(json_data)} items]"]
+
+                        # Recursive sessions search
+                        found_sessions = extract_sessions_recursive(json_data)
+                        if found_sessions:
+                            parsed_data.sessions.extend(found_sessions)
+                            parsed_data.has_sessions_file = True
+                            source_label = f"Active Sessions ({len(found_sessions)} found in {fname})"
+                            if "web_sessions" in top_keys:
+                                source_label += " (including Web Sessions)"
+                            parsed_data.recognized_sources.append(source_label)
+                            handled = True
+
+                        # Recursive service chat search
+                        if extract_service_chats_recursive(json_data, parsed_data, fname):
+                            handled = True
+
+                        # 6. Safe debug log at INFO level if unrecognized (key names and counts only, never values)
+                        if not handled:
+                            if isinstance(json_data, dict):
+                                logger.info(
+                                    "Unrecognized Telegram export file '%s'. Top-level keys: %s (count: %d)",
+                                    fname,
+                                    top_keys,
+                                    len(top_keys)
+                                )
+                            elif isinstance(json_data, list):
+                                logger.info(
+                                    "Unrecognized Telegram export file '%s'. Top-level list with %d items.",
+                                    fname,
+                                    len(json_data)
+                                )
+                            else:
+                                logger.info(
+                                    "Unrecognized Telegram export file '%s'. Data type: %s",
+                                    fname,
+                                    type(json_data).__name__
+                                )
                     except json.JSONDecodeError:
                         pass
 
-                if is_json:
+                if handled:
                     continue
 
-                # 2. Try HTML
+                # 3. Try HTML
                 lower_preview = stripped[:500].lower()
                 if "<html" in lower_preview or "<!doctype html" in lower_preview or "<div" in lower_preview or "<table" in lower_preview:
-                    parse_html_content(stripped, parsed_data, fname)
-                    continue
+                    if parse_html_content(stripped, parsed_data, fname):
+                        handled = True
+                        continue
+                    else:
+                        logger.info("Unrecognized HTML export file '%s'. No sessions table or service chat messages detected.", fname)
 
-                # 3. Try Text
-                parse_text_content(stripped, parsed_data, fname)
+                # 4. Try Text
+                if not handled:
+                    if parse_text_content(stripped, parsed_data, fname):
+                        handled = True
+                        continue
+                    else:
+                        logger.info("Unrecognized plaintext export file '%s'.", fname)
 
     finally:
-        # Memory cleanup: ensure uploaded file handles are closed
         for f in files:
             await f.close()
 
     # Verify if ANY recognizable Telegram data was discovered
-    has_valid_data = (len(parsed_data.sessions) > 0 or len(parsed_data.login_alerts) > 0 or len(parsed_data.login_code_events) > 0)
+    has_valid_data = (
+        len(parsed_data.sessions) > 0
+        or len(parsed_data.login_alerts) > 0
+        or len(parsed_data.login_code_events) > 0
+    )
+
     if not has_valid_data:
+        # Build improved 422 error message with found keys and specific hints
+        all_keys: list[str] = []
+        for keys in discovered_keys_by_file.values():
+            for k in keys:
+                if not k.startswith("[list of") and k not in all_keys:
+                    all_keys.append(k)
+
+        all_keys = sorted(all_keys)
+
+        if parsed_data.ignored_non_service_chats > 0 or "messages" in all_keys:
+            hint = "This looks like a personal chat export, which is ignored on purpose. Please upload only the official 'Telegram' service chat (User ID 777000) or your 'Active sessions' export."
+        elif all_keys:
+            hint = "This file has no session list. Re-export with only 'Active sessions' ticked in Telegram Desktop (Settings > Advanced > Export Telegram data)."
+        else:
+            hint = "Please follow the export guide: in Telegram Desktop, go to Settings > Advanced > Export Telegram data, select 'Active sessions' (Machine-readable JSON) or export your official 'Telegram' service chat history."
+
+        if all_keys:
+            detail = f"No recognizable Telegram export data could be found in the uploaded file(s). Found top-level keys: {all_keys}. Hint: {hint}"
+        else:
+            detail = f"No recognizable Telegram export data could be found in the uploaded file(s). Hint: {hint}"
+
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "No recognizable Telegram export data could be found in the uploaded file(s). "
-                "Please follow the export guide: in Telegram Desktop, go to Settings > Advanced > Export Telegram data, "
-                "select 'Active sessions' (Machine-readable JSON) or export your official 'Telegram' service chat history."
-            )
+            detail=detail
         )
 
     # -----------------------------------------------------------------------
@@ -603,7 +849,6 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
     countries = [s.get("country") for s in parsed_data.sessions if s.get("country") and s.get("country").lower() != "unknown"]
     unique_countries = sorted(list(set(countries)))
     if len(unique_countries) > 1:
-        # Determine main country by frequency
         country_counts = {c: countries.count(c) for c in unique_countries}
         main_country = max(country_counts, key=country_counts.get)
         other_countries = [c for c in unique_countries if c != main_country]
@@ -632,7 +877,6 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
         if isinstance(dt, datetime.datetime) and c and c.lower() != "unknown":
             travel_events.append((dt, c, a.get("device", "Alert")))
 
-    # Sort events by timestamp
     travel_events.sort(key=lambda x: x[0])
     for i in range(len(travel_events) - 1):
         t1, c1, d1 = travel_events[i]
@@ -651,7 +895,7 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
                     risk="critical",
                     date_str=t2.isoformat()
                 )
-                break  # flag once to avoid spam
+                break
 
     # Rule 4: Tor / VPN / Proxy / High-Abuse IP via inspect_ip
     unique_ips: list[str] = []
@@ -691,7 +935,6 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
                     risk="high"
                 )
         except Exception:
-            # Tolerant of external inspection failures
             pass
 
     # Rule 5: Inactive sessions for 30+ days
@@ -717,11 +960,9 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
     alert_timestamps.extend(parsed_data.login_code_events)
     alert_timestamps.sort()
 
-    rapid_takeover_detected = False
     for i in range(len(alert_timestamps)):
         window_events = [t for t in alert_timestamps if 0 <= (t - alert_timestamps[i]).total_seconds() <= 86400]
         if len(window_events) >= 3:
-            rapid_takeover_detected = True
             add_finding(
                 f_type="takeover_attempt",
                 title="Rapid Succession of Login Requests (Possible Takeover)",
@@ -739,7 +980,6 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
     for alert in parsed_data.login_alerts:
         alert_dev = alert.get("device", "")
         if alert_dev and alert_dev.lower() != "unknown device":
-            # Check if this device is present in current sessions
             match = any(alert_dev.lower() in d or d in alert_dev.lower() for d in current_device_names)
             if not match and len(parsed_data.sessions) > 0:
                 add_finding(
@@ -752,7 +992,7 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
                     risk="medium",
                     date_str=alert.get("date").isoformat() if isinstance(alert.get("date"), datetime.datetime) else None
                 )
-                break  # one representative finding
+                break
 
     # Rule 8: URLs in service chat run through inspect_link
     for url in parsed_data.service_urls[:5]:
@@ -800,29 +1040,35 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
     else:
         overall_risk = "low"
 
-    # Build Session objects
+    # Build Session objects with normalized shape
     session_models: list[TelegramSession] = []
     for idx, s in enumerate(parsed_data.sessions):
         app = s.get("app", "")
         country = s.get("country", "")
         is_susp = (not is_official_app(app)) or (len(unique_countries) > 1 and country and country != unique_countries[0])
 
-        last_act = s.get("last_active")
+        last_act = s.get("lastActive") or s.get("last_active")
         last_act_str = last_act.isoformat() if isinstance(last_act, datetime.datetime) else str(last_act)
+
+        created_val = s.get("createdAt") or s.get("created")
+        created_str = created_val.isoformat() if isinstance(created_val, datetime.datetime) else (str(created_val) if created_val else None)
 
         session_models.append(TelegramSession(
             id=f"sess-{idx + 1}",
             device=s.get("device", "Unknown Device"),
             app=s.get("app", "Telegram Client"),
+            platform=s.get("platform", ""),
             ip=s.get("ip", "Unknown IP"),
             country=s.get("country", "Unknown Location"),
+            region=s.get("region", ""),
+            createdAt=created_str,
             lastActive=last_act_str,
             isSuspicious=is_susp,
             isCurrent=s.get("is_current"),
             flagNote="Suspicious client or foreign location" if is_susp else None
         ))
 
-    # Mandatory manualChecks (Part B.4: export cannot show 2FA status, never claim on/off)
+    # Mandatory manualChecks
     manual_checks = [
         "Turn on Two-Step Verification (Settings > Privacy and Security > Two-Step Verification) with a strong, unique password.",
         "Add and verify a recovery email address to prevent irreversible lockout.",
@@ -830,7 +1076,7 @@ async def parse_and_analyze_telegram_export(files: list[UploadFile]) -> Telegram
         "Audit Phone Number Privacy settings (Settings > Privacy and Security > Phone Number) so that only your contacts can see your number.",
     ]
 
-    # Data Coverage note (Part B.5)
+    # Data Coverage note
     data_coverage = (
         "This analysis was produced from uploaded export files. Active session records and official Telegram service chat "
         "alerts were parsed and correlated. Limitations: Snapshot exports cannot verify real-time Two-Step Verification status, "

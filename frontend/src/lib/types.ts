@@ -4,8 +4,11 @@ export interface TelegramSession {
   id: string;
   device: string;
   app: string;
+  platform?: string;
   ip: string;
   country: string;
+  region?: string;
+  createdAt?: string;
   lastActive: string;
   isSuspicious: boolean;
   isCurrent?: boolean;
