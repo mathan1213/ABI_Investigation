@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -655,3 +656,313 @@ def test_send_code_rate_limiting():
         r4 = client.post("/api/telegram/send-code", json={"phone": "+919876543219"})
         assert r4.status_code == 429
         assert "Too many verification code requests" in r4.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 8. Resend Code Tests
+# ---------------------------------------------------------------------------
+
+def test_resend_code_success():
+    mock_client = AsyncMock()
+    mock_sent = MagicMock()
+    mock_sent.phone_code_hash = "new_hash_222"
+    mock_sent.type = MagicMock()
+    type(mock_sent.type).__name__ = "SentCodeTypeSms"
+    mock_sent.next_type = None
+    mock_sent.timeout = 120
+    mock_client.return_value = mock_sent  # client(ResendCodeRequest(...))
+
+    flow_id = "test-resend-success"
+    flow = TelegramFlow(
+        flow_id=flow_id,
+        phone="+919876543210",
+        client=mock_client,
+        phone_code_hash="old_hash_111",
+        code_type="app",
+        next_type="sms",
+        timeout=60,
+    )
+    # Simulate timeout elapsed
+    flow.sent_at = time.time() - 70
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["flowId"] == flow_id
+        assert data["codeType"] == "sms"
+        assert data["nextType"] is None
+        assert data["timeout"] == 120
+        assert flow.phone_code_hash == "new_hash_222"
+
+
+def test_resend_code_too_early():
+    mock_client = AsyncMock()
+    flow_id = "test-resend-too-early"
+    flow = TelegramFlow(
+        flow_id=flow_id,
+        phone="+919876543210",
+        client=mock_client,
+        phone_code_hash="hash_1",
+        code_type="app",
+        next_type="sms",
+        timeout=60,
+    )
+    flow.sent_at = time.time() - 10  # Only 10s elapsed out of 60s
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+        assert resp.status_code == 400
+        assert "Please wait" in resp.json()["detail"]
+
+
+def test_resend_code_no_next_type():
+    mock_client = AsyncMock()
+    flow_id = "test-resend-no-next"
+    flow = TelegramFlow(
+        flow_id=flow_id,
+        phone="+919876543210",
+        client=mock_client,
+        phone_code_hash="hash_1",
+        code_type="app",
+        next_type=None,  # No next type available
+        timeout=60,
+    )
+    flow.sent_at = time.time() - 70  # Timeout elapsed
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+        assert resp.status_code == 400
+        assert "No alternative code delivery method" in resp.json()["detail"]
+
+
+def test_resend_code_flood_wait():
+    from telethon.errors import FloodWaitError
+
+    mock_client = AsyncMock()
+    mock_client.side_effect = FloodWaitError(request=None, capture=300)
+
+    flow_id = "test-resend-flood"
+    flow = TelegramFlow(
+        flow_id=flow_id,
+        phone="+919876543210",
+        client=mock_client,
+        phone_code_hash="hash_1",
+        code_type="app",
+        next_type="sms",
+        timeout=60,
+    )
+    flow.sent_at = time.time() - 70
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+        assert resp.status_code == 429
+        assert "300 seconds" in resp.json()["detail"]
+
+
+def test_resend_code_rate_limit():
+    mock_client = AsyncMock()
+    mock_sent = MagicMock()
+    mock_sent.phone_code_hash = "h2"
+    mock_sent.type = MagicMock()
+    type(mock_sent.type).__name__ = "SentCodeTypeSms"
+    mock_next = MagicMock()
+    type(mock_next).__name__ = "CodeTypeCall"
+    mock_sent.next_type = mock_next
+    mock_sent.timeout = 60
+    mock_client.return_value = mock_sent
+
+    flow_id = "test-resend-rl"
+    flow = TelegramFlow(
+        flow_id=flow_id,
+        phone="+919876543210",
+        client=mock_client,
+        phone_code_hash="h1",
+        code_type="app",
+        next_type="sms",
+        timeout=0,  # 0 timeout so each succeeds
+    )
+    flow.sent_at = time.time() - 100
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        for _ in range(3):
+            flow.sent_at = time.time() - 100
+            flow.timeout = 0
+            r = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+            assert r.status_code == 200
+
+        flow.sent_at = time.time() - 100
+        flow.timeout = 0
+        r_limited = client.post("/api/telegram/resend-code", json={"flowId": flow_id})
+        assert r_limited.status_code == 429
+        assert "Too many resend attempts" in r_limited.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 9. QR Flow Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_qr_start_success():
+    mock_client = AsyncMock()
+    mock_client.connect = AsyncMock()
+    mock_qr = MagicMock()
+    mock_qr.url = "tg://login?token=mock_qr_token_abc"
+    mock_qr.expires = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=120)
+    mock_qr.wait = AsyncMock(side_effect=asyncio.CancelledError)  # background task
+    mock_client.qr_login = AsyncMock(return_value=mock_qr)
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ), patch("telethon.TelegramClient", return_value=mock_client):
+        resp = client.post("/api/telegram/qr/start")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "flowId" in data
+        assert data["qrUrl"] == "tg://login?token=mock_qr_token_abc"
+        assert data["expiresIn"] > 0
+        assert data["flowId"] in _flows
+
+
+def test_qr_status_waiting():
+    flow_id = "test-qr-wait"
+    mock_client = AsyncMock()
+    mock_qr = MagicMock()
+    mock_qr.expires = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=60)
+    flow = TelegramFlow(flow_id, phone="", client=mock_client, is_qr=True)
+    flow.qr_login = mock_qr
+    flow.status = "waiting"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.get(f"/api/telegram/qr/status?flowId={flow_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "waiting"
+
+
+def test_qr_status_scanned():
+    flow_id = "test-qr-scanned"
+    mock_client = AsyncMock()
+    mock_qr = MagicMock()
+    flow = TelegramFlow(flow_id, phone="", client=mock_client, is_qr=True)
+    flow.qr_login = mock_qr
+    flow.status = "scanned"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.get(f"/api/telegram/qr/status?flowId={flow_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "scanned"
+
+
+def test_qr_status_needs_password():
+    flow_id = "test-qr-2fa"
+    mock_client = AsyncMock()
+    mock_qr = MagicMock()
+    flow = TelegramFlow(flow_id, phone="", client=mock_client, is_qr=True)
+    flow.qr_login = mock_qr
+    flow.status = "needsPassword"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.get(f"/api/telegram/qr/status?flowId={flow_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "needsPassword"
+
+
+@pytest.mark.asyncio
+async def test_qr_status_expired_and_recreated():
+    flow_id = "test-qr-expired"
+    mock_client = AsyncMock()
+    mock_qr = MagicMock()
+    # Expired 5 seconds ago
+    mock_qr.expires = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=5)
+    mock_qr.url = "tg://login?token=new_recreated_token"
+
+    async def fake_recreate():
+        mock_qr.expires = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=60)
+
+    mock_qr.recreate = AsyncMock(side_effect=fake_recreate)
+    mock_qr.wait = AsyncMock(side_effect=asyncio.CancelledError)
+
+    flow = TelegramFlow(flow_id, phone="", client=mock_client, is_qr=True)
+    flow.qr_login = mock_qr
+    flow.status = "waiting"
+    _flows[flow_id] = flow
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ):
+        resp = client.get(f"/api/telegram/qr/status?flowId={flow_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "expired"
+        assert data["qrUrl"] == "tg://login?token=new_recreated_token"
+        assert data["expiresIn"] > 0
+        mock_qr.recreate.assert_called_once()
+
+
+def test_qr_start_rate_limit():
+    mock_client = AsyncMock()
+    mock_client.connect = AsyncMock()
+    mock_qr = MagicMock()
+    mock_qr.url = "tg://login?token=mock_token"
+    mock_qr.expires = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=60)
+    mock_qr.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    mock_client.qr_login = AsyncMock(return_value=mock_qr)
+
+    with patch.object(settings, "TELEGRAM_API_ID", 12345), patch.object(
+        settings, "TELEGRAM_API_HASH", "mock_hash"
+    ), patch("telethon.TelegramClient", return_value=mock_client):
+        for _ in range(3):
+            r = client.post("/api/telegram/qr/start")
+            assert r.status_code == 200
+
+        r_limited = client.post("/api/telegram/qr/start")
+        assert r_limited.status_code == 429
+        assert "Too many QR login requests" in r_limited.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 10. Status Endpoint Tests for Missing / Present Keys
+# ---------------------------------------------------------------------------
+
+def test_status_endpoint_missing_keys():
+    with patch.object(settings, "TELEGRAM_API_ID", None), patch.object(
+        settings, "TELEGRAM_API_HASH", None
+    ):
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["telegram"] is False
+
+
+def test_status_endpoint_configured_keys():
+    with patch.object(settings, "TELEGRAM_API_ID", 123456), patch.object(
+        settings, "TELEGRAM_API_HASH", "valid_hash"
+    ):
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["telegram"] is True

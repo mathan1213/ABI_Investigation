@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   Send,
   ShieldCheck,
-  ShieldAlert,
   Lock,
   Eye,
   CheckCircle,
@@ -15,12 +15,13 @@ import {
   FileText,
   HelpCircle,
   Laptop,
-  Globe,
-  Footprints,
   Compass,
-  Link2,
   Loader2,
   ExternalLink,
+  QrCode,
+  Globe,
+  Footprints,
+  Link2,
 } from 'lucide-react';
 import { Stepper, StepItem } from '../components/Stepper';
 import { Analyzing } from '../components/Analyzing';
@@ -30,11 +31,20 @@ import { SessionTable } from '../components/SessionTable';
 import { useScan } from '../context/ScanContext';
 import {
   sendTelegramCode,
+  resendTelegramCode,
+  startTelegramQr,
+  getTelegramQrStatus,
   verifyTelegramCode,
   analyzeTelegram,
   cancelTelegram,
 } from '../lib/api';
 import { TelegramScanResult, TelegramFindingType } from '../lib/types';
+import {
+  COUNTRIES,
+  splitAndCleanPhoneNumber,
+  validateNationalPhone,
+  maskE164Phone,
+} from '../lib/phoneUtils';
 
 const STEPS: StepItem[] = [
   { id: 1, title: 'Consent', description: 'Read-only safety guarantee' },
@@ -60,17 +70,96 @@ export const LinkTelegram: React.FC = () => {
   // If already scanned previously, default to Step 4, otherwise Step 1
   const [step, setStep] = useState<number>(telegramScan ? 4 : 1);
   const [agreedToConsent, setAgreedToConsent] = useState(false);
-  const [phone, setPhone] = useState('');
+
+  // Phone input states
+  const [countryCode, setCountryCode] = useState('+91');
+  const [nationalPhone, setNationalPhone] = useState('');
+  const [maskedPhone, setMaskedPhone] = useState('');
+
+  // Flow & auth states
   const [flowId, setFlowId] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [password, setPassword] = useState('');
   const [needsPassword, setNeedsPassword] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
+  const [codeType, setCodeType] = useState<'app' | 'sms' | 'call' | 'other'>('app');
+  const [nextType, setNextType] = useState<'sms' | 'call' | 'other' | null>(null);
+  const [countdown, setCountdown] = useState<number>(0);
+  const [isResending, setIsResending] = useState(false);
+
+  // QR Mode states
+  const [isQrMode, setIsQrMode] = useState(false);
+  const [qrUrl, setQrUrl] = useState<string>('');
+  const [qrExpiresIn, setQrExpiresIn] = useState<number>(60);
+  const [isStartingQr, setIsStartingQr] = useState(false);
+
+  // Progress & loading states
   const [isDemo, setIsDemo] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeChecklist, setActiveChecklist] = useState<Record<number, boolean>>({});
+
+  const qrPollRef = useRef<number | null>(null);
+
+  // Countdown timer effect for code resend
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
+
+  // QR Code polling effect
+  useEffect(() => {
+    if (!isQrMode || !flowId || step !== 2) {
+      if (qrPollRef.current) {
+        clearInterval(qrPollRef.current);
+        qrPollRef.current = null;
+      }
+      return;
+    }
+
+    const pollStatus = async () => {
+      try {
+        const res = await getTelegramQrStatus(flowId);
+        if (res.status === 'scanned') {
+          if (qrPollRef.current) clearInterval(qrPollRef.current);
+          addToast({
+            type: 'success',
+            title: 'QR Code Scanned',
+            message: 'Telegram app authorized! Starting security inspection...',
+          });
+          setStep(3);
+          runAnalysis(flowId);
+        } else if (res.status === 'needsPassword') {
+          if (qrPollRef.current) clearInterval(qrPollRef.current);
+          setNeedsPassword(true);
+          addToast({
+            type: 'warning',
+            title: 'Cloud Password Required',
+            message: 'Your account has Two-Step Verification enabled.',
+          });
+        } else if (res.status === 'expired') {
+          if (res.qrUrl) {
+            setQrUrl(res.qrUrl);
+            setQrExpiresIn(res.expiresIn || 60);
+          }
+        }
+      } catch (err: any) {
+        // Silently tolerate transient poll error
+      }
+    };
+
+    qrPollRef.current = window.setInterval(pollStatus, 2000);
+    return () => {
+      if (qrPollRef.current) {
+        clearInterval(qrPollRef.current);
+        qrPollRef.current = null;
+      }
+    };
+  }, [isQrMode, flowId, step]);
 
   // Cleanup on unmount if in-flight flow exists
   useEffect(() => {
@@ -81,37 +170,61 @@ export const LinkTelegram: React.FC = () => {
     };
   }, [flowId, step]);
 
+  const phoneValidation = validateNationalPhone(countryCode, nationalPhone);
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const res = splitAndCleanPhoneNumber(raw, countryCode);
+    setCountryCode(res.countryCode);
+    setNationalPhone(res.nationalNumber);
+    if (otpSent) {
+      setOtpSent(false);
+      setFlowId(null);
+      setNeedsPassword(false);
+    }
+  };
+
   const handleSendCode = async () => {
-    const cleanPhone = phone.trim();
-    if (!cleanPhone || cleanPhone.length < 8) {
-      setErrorMsg('Please enter a valid phone number with country code (e.g. +1 555 019 2834 or +91 98765 43210).');
+    if (!phoneValidation.isValid) {
+      setErrorMsg(phoneValidation.message);
       return;
     }
+
+    const e164 = `${countryCode}${nationalPhone}`;
+    const masked = maskE164Phone(countryCode, nationalPhone);
+    setMaskedPhone(masked);
 
     setIsSendingCode(true);
     setErrorMsg(null);
 
     try {
-      const res = await sendTelegramCode(cleanPhone);
+      const res = await sendTelegramCode(e164);
       setFlowId(res.flowId);
       setIsDemo(!!res.isDemo);
       setOtpSent(true);
+      setCodeType(res.codeType || 'app');
+      setNextType(res.nextType || null);
+      setCountdown(res.timeout ?? 60);
 
       if (res.isDemo) {
         addToast({
           type: 'info',
           title: 'Demo Mode Active',
-          message: 'Explicit demo mode active. Enter any 5-digit code or test code.',
+          message: 'Explicit demo mode active. Enter any verification code.',
         });
       } else {
+        const methodMsg =
+          res.codeType === 'sms'
+            ? `SMS code sent to ${masked}`
+            : 'Telegram sent a code to your official Telegram app.';
         addToast({
           type: 'success',
           title: 'Verification Code Sent',
-          message: 'Telegram sent a verification code to your Telegram app or SMS.',
+          message: methodMsg,
         });
       }
     } catch (err: any) {
-      const msg = err?.message || 'Failed to send verification code. Please check your phone format.';
+      const msg = err?.message || 'Failed to send verification code. Please check your phone number.';
       setErrorMsg(msg);
       addToast({
         type: 'error',
@@ -123,12 +236,101 @@ export const LinkTelegram: React.FC = () => {
     }
   };
 
+  const handleResendCode = async () => {
+    if (!flowId) return;
+    setIsResending(true);
+    setErrorMsg(null);
+
+    try {
+      const res = await resendTelegramCode(flowId);
+      setCodeType(res.codeType || 'app');
+      setNextType(res.nextType || null);
+      setCountdown(res.timeout ?? 60);
+
+      const deliveryName = res.codeType === 'sms' ? 'SMS' : res.codeType === 'call' ? 'Phone call' : 'Telegram app';
+      addToast({
+        type: 'success',
+        title: 'Code Resent',
+        message: `Verification code requested via ${deliveryName}.`,
+      });
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to resend code.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'Resend Failed',
+        message: msg,
+      });
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleStartQr = async () => {
+    setIsStartingQr(true);
+    setErrorMsg(null);
+    try {
+      const res = await startTelegramQr();
+      setFlowId(res.flowId);
+      setQrUrl(res.qrUrl);
+      setQrExpiresIn(res.expiresIn || 60);
+      setIsQrMode(true);
+      setNeedsPassword(false);
+      addToast({
+        type: 'info',
+        title: 'QR Code Ready',
+        message: 'Scan the code with your official Telegram mobile app.',
+      });
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to initialize Telegram QR code.';
+      setErrorMsg(msg);
+      addToast({
+        type: 'error',
+        title: 'QR Code Error',
+        message: msg,
+      });
+    } finally {
+      setIsStartingQr(false);
+    }
+  };
+
+  const handleCancelQr = () => {
+    if (flowId) {
+      cancelTelegram(flowId);
+    }
+    setFlowId(null);
+    setIsQrMode(false);
+    setNeedsPassword(false);
+  };
+
+  const runAnalysis = async (currentFlowId: string) => {
+    try {
+      const scanResult: TelegramScanResult = await analyzeTelegram(currentFlowId);
+      setTelegramScan(scanResult);
+      setStep(4);
+      addToast({
+        type: 'success',
+        title: 'Investigation Complete',
+        message: 'Telegram session and security footprint audit finished.',
+      });
+    } catch (err: any) {
+      const msg = err?.message || 'Account forensics analysis failed. Please try again.';
+      setErrorMsg(msg);
+      setStep(2);
+      addToast({
+        type: 'error',
+        title: 'Audit Failed',
+        message: msg,
+      });
+    }
+  };
+
   const handleVerifyAndAnalyze = async () => {
     if (!flowId) {
-      setErrorMsg('Please request a verification code first.');
+      setErrorMsg('Please request a verification code or QR session first.');
       return;
     }
-    if (!otp || otp.trim().length < 4) {
+    if (!isQrMode && (!otp || otp.trim().length < 4)) {
       setErrorMsg('Please enter the verification code sent by Telegram.');
       return;
     }
@@ -148,85 +350,70 @@ export const LinkTelegram: React.FC = () => {
         setIsVerifying(false);
         addToast({
           type: 'warning',
-          title: 'Two-Step Password Required',
-          message: 'This Telegram account has a secondary password. Enter it below to proceed.',
+          title: 'Cloud Password Required',
+          message: 'Your Telegram account has Two-Step Verification enabled.',
         });
         return;
       }
 
-      // Verified! Transition to Step 3 (Analyzing)
       setStep(3);
-
-      const scanResult = await analyzeTelegram(flowId);
-      if (scanResult.isDemo || isDemo) {
-        setIsDemo(true);
-      }
-      setTelegramScan(scanResult);
-      setStep(4);
-      addToast({
-        type: 'success',
-        title: 'Audit Complete',
-        message: 'Your Telegram session audit report is ready.',
-      });
+      await runAnalysis(flowId);
     } catch (err: any) {
-      const msg = err?.message || 'Verification or analysis failed. Please check the code.';
+      const msg = err?.message || 'Invalid code or password. Please verify and try again.';
       setErrorMsg(msg);
       addToast({
         type: 'error',
         title: 'Verification Failed',
         message: msg,
       });
-      setStep(2);
     } finally {
       setIsVerifying(false);
     }
   };
 
-  const handleAuditAnotherNumber = async () => {
-    if (flowId && step < 4) {
-      await cancelTelegram(flowId);
-    }
-    setFlowId(null);
-    setOtpSent(false);
+  const handleAuditAnotherNumber = () => {
+    if (flowId) cancelTelegram(flowId);
+    setTelegramScan(null);
+    setStep(2);
+    setNationalPhone('');
+    setMaskedPhone('');
     setOtp('');
     setPassword('');
     setNeedsPassword(false);
+    setOtpSent(false);
+    setIsQrMode(false);
+    setFlowId(null);
     setErrorMsg(null);
-    setTelegramScan(null);
-    setAgreedToConsent(false);
-    setStep(1);
   };
 
-  const toggleChecklist = (index: number) => {
+  const toggleChecklist = (idx: number) => {
     setActiveChecklist((prev) => ({
       ...prev,
-      [index]: !prev[index],
+      [idx]: !prev[idx],
     }));
   };
 
   const getFindingIcon = (type: TelegramFindingType) => {
     switch (type) {
       case 'unknown_device':
-        return <Laptop size={18} className="text-red-400" />;
+        return <Laptop size={20} className="text-red-400" />;
       case 'foreign_login':
-        return <Globe size={18} className="text-orange-400" />;
+        return <Globe size={20} className="text-orange-400" />;
       case 'impossible_travel':
-        return <Footprints size={18} className="text-red-400" />;
+        return <Footprints size={20} className="text-red-400" />;
       case 'no_2fa':
-        return <Lock size={18} className="text-amber-400" />;
+        return <Lock size={20} className="text-yellow-400" />;
       case 'suspicious_link':
-        return <Link2 size={18} className="text-yellow-400" />;
-      default:
-        return <AlertTriangle size={18} className="text-yellow-400" />;
+        return <Link2 size={20} className="text-cyan-400" />;
     }
   };
 
   const scanData = telegramScan;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-fadeIn">
-      {/* Header */}
-      <div className="text-center space-y-2">
+    <div className="max-w-4xl mx-auto space-y-8">
+      {/* Top Banner & Header */}
+      <div className="text-center space-y-3">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/20 text-sky-400 text-xs font-semibold uppercase tracking-wider">
           <Send size={13} />
           <span>Telegram Account Investigation</span>
@@ -333,9 +520,13 @@ export const LinkTelegram: React.FC = () => {
         <div className="glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 space-y-6">
           <div className="flex items-start justify-between">
             <div>
-              <h2 className="text-xl font-bold text-white">Connect Telegram for Audit</h2>
+              <h2 className="text-xl font-bold text-white">
+                {isQrMode ? 'Scan QR Code with Telegram' : 'Connect Telegram for Audit'}
+              </h2>
               <p className="text-sm text-slate-400 mt-1">
-                Enter your international phone number to receive a temporary one-time verification code.
+                {isQrMode
+                  ? 'Open Telegram on your mobile phone and scan this QR code to authorize inspection.'
+                  : 'Enter your mobile number to receive a temporary one-time verification code.'}
               </p>
             </div>
             <button
@@ -343,20 +534,34 @@ export const LinkTelegram: React.FC = () => {
                 if (flowId) cancelTelegram(flowId);
                 setStep(1);
               }}
-              className="text-xs text-slate-400 hover:text-white"
+              className="text-xs text-slate-400 hover:text-white transition-colors"
             >
               Back to Consent
             </button>
           </div>
 
-          {/* 3 Simple Steps Setup Guide if Telegram keys missing */}
+          {/* Service Unavailable Friendly Notice (PART A requirement) */}
           {systemStatus && !systemStatus.telegram && (
-            <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-500/20 pb-3">
-                <div className="flex items-center gap-2 font-bold text-sm text-amber-300">
-                  <AlertTriangle size={18} className="shrink-0 text-amber-400" />
-                  <span>How to Connect Your Telegram Account (3 Simple Steps)</span>
-                </div>
+            <div className="p-8 rounded-2xl bg-slate-900/90 border border-slate-800 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+                <AlertTriangle size={28} />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-lg font-bold text-white">
+                  Telegram linking is not available right now.
+                </h3>
+                <p className="text-sm text-slate-400 max-w-md mx-auto">
+                  The service owner needs to finish a one-time setup.
+                </p>
+              </div>
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+                <Link
+                  to="/setup"
+                  className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold underline inline-flex items-center gap-1"
+                >
+                  <span>Owner setup instructions</span>
+                  <ExternalLink size={12} />
+                </Link>
                 <button
                   type="button"
                   onClick={async () => {
@@ -364,72 +569,14 @@ export const LinkTelegram: React.FC = () => {
                     addToast({
                       type: 'info',
                       title: 'Configuration Checked',
-                      message: 'Checked backend status.',
+                      message: 'Backend status re-checked.',
                     });
                   }}
-                  className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-semibold flex items-center gap-1.5 transition-colors self-start sm:self-auto shrink-0"
-                  title="Check if keys in backend/.env are recognized"
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 >
                   <RotateCcw size={12} />
-                  <span>Re-check Configuration</span>
+                  <span>Re-check configuration</span>
                 </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-                {/* Step 1 */}
-                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
-                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
-                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">1</span>
-                    <span>Get Free Telegram Keys</span>
-                  </div>
-                  <p className="text-slate-300 text-[11px] leading-relaxed">
-                    Open{' '}
-                    <a
-                      href="https://my.telegram.org"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-cyan-400 hover:underline font-semibold inline-flex items-center gap-0.5"
-                    >
-                      my.telegram.org <ExternalLink size={11} />
-                    </a>{' '}
-                    and log in with your phone number.
-                  </p>
-                  <p className="text-slate-400 text-[10px] leading-relaxed">
-                    Click <strong>API development tools</strong>. Enter any App title (e.g. <code>ABI Security</code>), Short name, select <strong>Desktop</strong>, and submit to view your <code>api_id</code> and <code>api_hash</code>.
-                  </p>
-                </div>
-
-                {/* Step 2 */}
-                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
-                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
-                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">2</span>
-                    <span>Add to backend/.env</span>
-                  </div>
-                  <p className="text-slate-300 text-[11px] leading-relaxed">
-                    Open <code className="bg-slate-950 px-1 py-0.5 rounded text-amber-300">backend/.env</code> in your project and paste your keys:
-                  </p>
-                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px] text-amber-300 select-all leading-tight">
-                    TELEGRAM_API_ID=your_id_numbers<br />
-                    TELEGRAM_API_HASH=your_hash_string
-                  </div>
-                  <p className="text-slate-400 text-[10px]">
-                    Save the file. (The backend auto-reloads changes automatically.)
-                  </p>
-                </div>
-
-                {/* Step 3 */}
-                <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
-                  <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
-                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-[11px] font-mono">3</span>
-                    <span>Request Login Code</span>
-                  </div>
-                  <p className="text-slate-300 text-[11px] leading-relaxed">
-                    Enter your phone number below with international format (e.g. <code>+916379617482</code>) and click <strong>Send Code</strong>.
-                  </p>
-                  <p className="text-emerald-400 text-[10px] font-medium leading-relaxed">
-                    ✓ Telegram sends a code directly to your official app. Enter it to audit foreign devices. Inspection session is logged out immediately when done!
-                  </p>
-                </div>
               </div>
             </div>
           )}
@@ -440,7 +587,7 @@ export const LinkTelegram: React.FC = () => {
               <AlertTriangle size={16} className="shrink-0 text-amber-400" />
               <div>
                 <span className="font-semibold block text-amber-200">
-                  Demo Mode (Telegram API keys not configured on server)
+                  Demo Mode Active
                 </span>
                 <span className="text-slate-300">
                   You can test this audit flow with any phone number. A simulated verification code (e.g. 12345) will work.
@@ -456,141 +603,314 @@ export const LinkTelegram: React.FC = () => {
             </div>
           )}
 
-          <div className="space-y-4 max-w-lg">
-            {/* Phone input */}
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                Phone Number (with Country Code)
-              </label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                    <Smartphone size={17} />
-                  </div>
-                  <input
-                    type="text"
-                    value={phone}
-                    onChange={(e) => {
-                      setPhone(e.target.value);
-                      if (otpSent) {
-                        setOtpSent(false);
-                        setFlowId(null);
-                        setNeedsPassword(false);
-                      }
-                    }}
-                    placeholder="e.g. +1 555 019 2834 or +91 98765 43210"
-                    className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                  />
-                </div>
-                <button
-                  type="button"
-                  disabled={isSendingCode}
-                  onClick={handleSendCode}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-cyan-400 text-xs font-semibold border border-slate-700 disabled:opacity-50 transition-colors flex items-center gap-1.5 shrink-0"
-                >
-                  {isSendingCode ? (
-                    <>
-                      <Loader2 size={13} className="animate-spin" />
-                      <span>Sending...</span>
-                    </>
-                  ) : otpSent ? (
-                    <span>Resend Code</span>
-                  ) : (
-                    <span>Send Code</span>
-                  )}
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Enter your number with international prefix (e.g. +1, +91, +44).
-              </p>
-            </div>
-
-            {/* OTP Section */}
-            {otpSent && (
-              <div className="space-y-3 animate-fadeIn">
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
-                      Telegram Verification Code
-                    </label>
-                    <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
-                      <CheckCircle size={12} /> Code Sent to Telegram App
-                    </span>
-                  </div>
-
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                      <KeyRound size={17} />
-                    </div>
-                    <input
-                      type="text"
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value)}
-                      placeholder="e.g. 59381"
-                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono tracking-widest focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                    />
-                  </div>
-
-                  {/* Required note under code field */}
-                  <p className="text-[11px] text-cyan-400/90 mt-1.5 flex items-center gap-1.5">
-                    <ShieldCheck size={13} className="shrink-0 text-cyan-400" />
-                    <span>Telegram will send you a 'new login' alert. That is this tool, and it logs out when finished.</span>
-                  </p>
-                </div>
-
-                {/* Password field if 2-step verification is enabled */}
-                {needsPassword && (
-                  <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
-                    <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
-                      <Lock size={15} />
-                      <span>Two-Step Verification Password Required</span>
-                    </div>
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      Your Telegram account has cloud password protection enabled. Enter your password to inspect session logs. It is held only in temporary server memory and never stored.
-                    </p>
-                    <div className="relative mt-2">
-                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                        <KeyRound size={17} />
+          {/* Only render connection forms if Telegram is configured or in demo */}
+          {(!systemStatus || systemStatus.telegram) && (
+            <div className="space-y-6 max-w-xl">
+              {/* QR Code Flow (PART D) */}
+              {isQrMode ? (
+                <div className="space-y-5 animate-fadeIn">
+                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col items-center text-center space-y-4">
+                    {/* Render QR with qrcode.react */}
+                    {qrUrl ? (
+                      <div className="p-3 bg-white rounded-2xl shadow-xl">
+                        <QRCodeSVG value={qrUrl} size={210} level="M" />
                       </div>
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter your Two-Step Verification password"
-                        className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
-                      />
+                    ) : (
+                      <div className="w-[210px] h-[210px] flex items-center justify-center bg-slate-950 rounded-2xl border border-slate-800">
+                        <Loader2 size={32} className="animate-spin text-cyan-400" />
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-xs font-semibold">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                        <span>Waiting for scan in Telegram app...</span>
+                      </div>
+                      <p className="text-xs text-slate-300 font-medium">
+                        Telegram app &rarr; Settings &rarr; Devices &rarr; Link Desktop Device &rarr; scan
+                      </p>
                     </div>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
+
+                  {/* Cloud Password field if QR scan triggered SessionPasswordNeededError */}
+                  {needsPassword && (
+                    <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
+                      <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
+                        <Lock size={15} />
+                        <span>Two-Step Verification Password Required</span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        Your Telegram account has cloud password protection enabled. Enter your password to complete verification. It is held only in temporary server memory and never stored.
+                      </p>
+                      <div className="relative mt-2">
+                        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                          <KeyRound size={17} />
+                        </div>
+                        <input
+                          type="password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="Enter your Two-Step Verification password"
+                          className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isVerifying || !password}
+                        onClick={handleVerifyAndAnalyze}
+                        className="mt-2 w-full py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-xs hover:bg-cyan-300 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                      >
+                        {isVerifying ? (
+                          <>
+                            <Loader2 size={14} className="animate-spin" />
+                            <span>Verifying Password...</span>
+                          </>
+                        ) : (
+                          <span>Submit Password & Start Audit</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2">
+                    <button
+                      type="button"
+                      onClick={handleCancelQr}
+                      className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      <Smartphone size={14} />
+                      <span>Use phone number instead</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Phone Number & OTP Flow (PART B & PART C) */
+                <div className="space-y-5">
+                  {/* Phone input with Country Code Dropdown */}
+                  {!otpSent && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+                          Mobile Number
+                        </label>
+                        <button
+                          type="button"
+                          disabled={isStartingQr}
+                          onClick={handleStartQr}
+                          className="text-xs text-cyan-400 hover:text-cyan-300 font-semibold inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <QrCode size={14} />
+                          <span>Link with QR code instead</span>
+                        </button>
+                      </div>
+
+                      <div className="flex gap-2">
+                        {/* Country Code Dropdown */}
+                        <div className="relative w-40 shrink-0">
+                          <select
+                            value={countryCode}
+                            onChange={(e) => setCountryCode(e.target.value)}
+                            className="w-full h-11 pl-3 pr-8 rounded-xl bg-slate-900 border border-slate-700 text-white text-xs font-semibold focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 appearance-none transition-colors cursor-pointer"
+                          >
+                            {COUNTRIES.map((c) => (
+                              <option key={c.code} value={c.code} className="bg-slate-900 text-white">
+                                {c.flag} {c.code} ({c.name})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400 text-xs">
+                            ▼
+                          </div>
+                        </div>
+
+                        {/* National Number Input */}
+                        <div className="relative flex-1">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                            <Smartphone size={17} />
+                          </div>
+                          <input
+                            type="tel"
+                            value={nationalPhone}
+                            onChange={handlePhoneChange}
+                            placeholder={countryCode === '+91' ? 'e.g. 98765 43210' : 'Mobile number'}
+                            className="w-full h-11 pl-10 pr-4 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                          />
+                        </div>
+
+                        {/* Send Code Button */}
+                        <button
+                          type="button"
+                          disabled={isSendingCode || !phoneValidation.isValid}
+                          onClick={handleSendCode}
+                          className="h-11 px-5 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 shrink-0 shadow-glow"
+                        >
+                          {isSendingCode ? (
+                            <>
+                              <Loader2 size={13} className="animate-spin" />
+                              <span>Sending...</span>
+                            </>
+                          ) : (
+                            <span>Send Code</span>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Live validation feedback */}
+                      <p
+                        className={`text-xs transition-colors ${
+                          phoneValidation.isValid ? 'text-emerald-400 font-medium' : 'text-slate-400'
+                        }`}
+                      >
+                        {phoneValidation.message}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* OTP Section once code is sent */}
+                  {otpSent && (
+                    <div className="space-y-4 animate-fadeIn">
+                      {/* Masked Phone Info Banner */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle size={16} className="text-emerald-400" />
+                          <span className="text-xs text-slate-300">
+                            Code requested for <strong className="text-white font-mono">{maskedPhone}</strong>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (flowId) cancelTelegram(flowId);
+                            setOtpSent(false);
+                            setFlowId(null);
+                            setOtp('');
+                          }}
+                          className="text-[11px] text-cyan-400 hover:underline font-semibold"
+                        >
+                          Change Number
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                          Telegram Verification Code
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                            <KeyRound size={17} />
+                          </div>
+                          <input
+                            type="text"
+                            value={otp}
+                            onChange={(e) => setOtp(e.target.value)}
+                            placeholder="e.g. 59381"
+                            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm font-mono tracking-widest focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                          />
+                        </div>
+
+                        {/* Truthful delivery instruction based on codeType (PART C requirement) */}
+                        <div className="mt-2 text-xs space-y-1">
+                          <p className="text-slate-300 font-medium flex items-center gap-1.5">
+                            <Send size={12} className="text-cyan-400 shrink-0" />
+                            <span>
+                              {codeType === 'app'
+                                ? "Open your Telegram app and look for a message from 'Telegram'"
+                                : codeType === 'sms'
+                                ? `We sent an SMS to ${maskedPhone}`
+                                : codeType === 'call'
+                                ? `Telegram will call ${maskedPhone} with your code`
+                                : 'Check your Telegram app or SMS for the verification code'}
+                            </span>
+                          </p>
+
+                          {/* Countdown and Resend */}
+                          <div className="flex items-center gap-3 pt-1 text-[11px]">
+                            {countdown > 0 ? (
+                              <span className="text-slate-500 font-mono">
+                                Resend available in {countdown}s
+                              </span>
+                            ) : nextType ? (
+                              <button
+                                type="button"
+                                disabled={isResending}
+                                onClick={handleResendCode}
+                                className="text-cyan-400 hover:text-cyan-300 font-semibold underline flex items-center gap-1"
+                              >
+                                {isResending && <Loader2 size={11} className="animate-spin" />}
+                                <span>Didn't get the code? Send it another way</span>
+                              </button>
+                            ) : (
+                              <span className="text-slate-500">
+                                No alternative delivery method reported by Telegram
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Telegram Login Alert Disclaimer */}
+                        <p className="text-[11px] text-cyan-400/90 mt-2 flex items-center gap-1.5">
+                          <ShieldCheck size={13} className="shrink-0 text-cyan-400" />
+                          <span>Telegram will send you a 'new login' alert. That is this tool, and it logs out when finished.</span>
+                        </p>
+                      </div>
+
+                      {/* Password field if 2-step verification is enabled */}
+                      {needsPassword && (
+                        <div className="space-y-2 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 animate-fadeIn">
+                          <div className="flex items-center gap-2 text-amber-300 font-semibold text-xs">
+                            <Lock size={15} />
+                            <span>Two-Step Verification Password Required</span>
+                          </div>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            Your Telegram account has cloud password protection enabled. Enter your password to inspect session logs. It is held only in temporary server memory and never stored.
+                          </p>
+                          <div className="relative mt-2">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                              <KeyRound size={17} />
+                            </div>
+                            <input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="Enter your Two-Step Verification password"
+                              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-colors"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Connect & Run Audit Button */}
+                      <div className="pt-2">
+                        <button
+                          disabled={!otpSent || isVerifying || otp.trim().length < 4}
+                          onClick={handleVerifyAndAnalyze}
+                          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-glow hover:shadow-glow-lg"
+                        >
+                          {isVerifying ? (
+                            <>
+                              <Loader2 size={16} className="animate-spin" />
+                              <span>Verifying & Starting Audit...</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>Connect & Run Audit</span>
+                              <ArrowRight size={16} />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
             <HelpCircle size={15} className="text-cyan-400 shrink-0" />
             <span>
               Clicking <strong>Connect & Run Audit</strong> queries active sessions and IP geolocations, then immediately calls logout.
             </span>
-          </div>
-
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
-            <button
-              disabled={!otpSent || isVerifying}
-              onClick={handleVerifyAndAnalyze}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-cyan-400 text-slate-950 font-bold text-sm hover:bg-cyan-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-glow hover:shadow-glow-lg"
-            >
-              {isVerifying ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  <span>Verifying & Starting Audit...</span>
-                </>
-              ) : (
-                <>
-                  <span>Connect & Run Audit</span>
-                  <ArrowRight size={16} />
-                </>
-              )}
-            </button>
           </div>
         </div>
       )}
@@ -613,10 +933,10 @@ export const LinkTelegram: React.FC = () => {
               <AlertTriangle size={16} className="shrink-0 text-amber-400" />
               <div>
                 <span className="font-semibold block text-amber-200">
-                  Demo Mode (Telegram API keys not configured on server)
+                  Demo Mode Active
                 </span>
                 <span className="text-slate-300">
-                  This report was generated using simulated mock data because Telegram MTProto keys (TELEGRAM_API_ID and TELEGRAM_API_HASH) are not configured in backend/.env.
+                  This report was generated using simulated mock data.
                 </span>
               </div>
             </div>
@@ -628,7 +948,7 @@ export const LinkTelegram: React.FC = () => {
               <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
                 <RiskBadge level={scanData.riskLevel} size="lg" />
                 <span className="text-xs text-slate-400 font-mono">
-                  Target: {scanData.phone}
+                  Target: {maskedPhone || scanData.phone}
                 </span>
                 <span className="text-xs text-cyan-400 font-medium">
                   {scanData.accountName}

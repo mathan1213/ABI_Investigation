@@ -79,13 +79,24 @@ export const Navbar: React.FC = () => {
 
             {/* Data Mode Indicator */}
             <div className="ml-2 pl-3 border-l border-slate-800 flex items-center gap-2">
-              <span
-                className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${dataModeBadge.colorClass}`}
-                title={`Current data mode: ${dataModeBadge.label}`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
-                <span>{dataModeBadge.label}</span>
-              </span>
+              {isSetupNeeded ? (
+                <Link
+                  to="/setup"
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5 hover:scale-105 transition-transform ${dataModeBadge.colorClass}`}
+                  title="Setup needed - Click to view Owner Setup Instructions"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+                  <span>{dataModeBadge.label}</span>
+                </Link>
+              ) : (
+                <span
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${dataModeBadge.colorClass}`}
+                  title={`Current data mode: ${dataModeBadge.label}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+                  <span>{dataModeBadge.label}</span>
+                </span>
+              )}
             </div>
 
             {/* Quick status pill */}
@@ -111,12 +122,23 @@ export const Navbar: React.FC = () => {
 
           {/* Mobile Menu Button & Mode Badge */}
           <div className="flex items-center gap-2 md:hidden">
-            <span
-              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${dataModeBadge.colorClass}`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
-              <span>{dataModeBadge.label}</span>
-            </span>
+            {isSetupNeeded ? (
+              <Link
+                to="/setup"
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${dataModeBadge.colorClass}`}
+                title="Setup needed - Click to view Owner Setup Instructions"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+                <span>{dataModeBadge.label}</span>
+              </Link>
+            ) : (
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${dataModeBadge.colorClass}`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${dataModeBadge.dotClass}`} />
+                <span>{dataModeBadge.label}</span>
+              </span>
+            )}
             {hasAnyScan && (
               <span
                 className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${

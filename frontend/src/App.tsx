@@ -9,6 +9,7 @@ import { LinkTelegram } from './pages/LinkTelegram';
 import { RepoCheck } from './pages/RepoCheck';
 import { NetworkCheck } from './pages/NetworkCheck';
 import { Report } from './pages/Report';
+import { OwnerSetup } from './pages/OwnerSetup';
 import { NotFound } from './pages/NotFound';
 
 export const App: React.FC = () => {
@@ -27,6 +28,7 @@ export const App: React.FC = () => {
               <Route path="/repo" element={<RepoCheck />} />
               <Route path="/network" element={<NetworkCheck />} />
               <Route path="/report" element={<Report />} />
+              <Route path="/setup" element={<OwnerSetup />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </main>

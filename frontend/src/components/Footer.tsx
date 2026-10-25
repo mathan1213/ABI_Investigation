@@ -1,9 +1,10 @@
 import React from 'react';
-import { ShieldCheck, Lock, Trash2, Heart } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ShieldCheck, Lock, Trash2, Settings } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
 
 export const Footer: React.FC = () => {
-  const { clearAllScans, hasAnyScan } = useScan();
+  const { clearAllScans } = useScan();
 
   return (
     <footer className="w-full border-t border-slate-850 bg-[#070C15] py-8 text-xs text-slate-400 no-print">
@@ -26,7 +27,18 @@ export const Footer: React.FC = () => {
           </div>
 
           {/* Actions & session clear */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap justify-center md:justify-end">
+            <Link
+              to="/setup"
+              className="text-slate-400 hover:text-cyan-400 transition-colors flex items-center gap-1"
+              title="View backend configuration and developer setup"
+            >
+              <Settings size={13} />
+              <span>Owner setup instructions</span>
+            </Link>
+
+            <span className="text-slate-700 hidden sm:inline">•</span>
+
             <button
               onClick={clearAllScans}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 bg-slate-900 text-slate-400 hover:text-red-400 hover:border-red-500/30 transition-colors"
@@ -36,8 +48,10 @@ export const Footer: React.FC = () => {
               <span>Clear all data</span>
             </button>
 
+            <span className="text-slate-700 hidden sm:inline">•</span>
+
             <div className="text-slate-400 flex items-center gap-1">
-              <span>Account Breach Investigation</span>
+              <span>ABI Investigation</span>
               <span>•</span>
               <span className="text-cyan-400">v1.0</span>
             </div>

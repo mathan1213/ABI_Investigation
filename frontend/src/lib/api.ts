@@ -81,6 +81,21 @@ export interface SendTelegramCodeResult {
   flowId: string;
   isDemo?: boolean;
   message?: string;
+  codeType?: 'app' | 'sms' | 'call' | 'other';
+  nextType?: 'sms' | 'call' | 'other' | null;
+  timeout?: number;
+}
+
+export interface TelegramQRStartResult {
+  flowId: string;
+  qrUrl: string;
+  expiresIn: number;
+}
+
+export interface TelegramQRStatusResult {
+  status: 'waiting' | 'scanned' | 'needsPassword' | 'expired';
+  qrUrl?: string;
+  expiresIn?: number;
 }
 
 export interface VerifyTelegramCodeResult {
@@ -257,7 +272,7 @@ export async function sendTelegramCode(phone: string): Promise<SendTelegramCodeR
   }
 
   if (res.status === 503) {
-    throw new Error('Telegram integration is not configured on the server. Please add TELEGRAM_API_ID and TELEGRAM_API_HASH from https://my.telegram.org to backend/.env.');
+    throw new Error('Telegram linking is not available right now. The service owner needs to finish a one-time setup.');
   }
 
   if (res.status === 429) {
@@ -274,8 +289,103 @@ export async function sendTelegramCode(phone: string): Promise<SendTelegramCodeR
   return {
     flowId: data.flowId,
     message: data.message,
+    codeType: data.codeType || 'app',
+    nextType: data.nextType || null,
+    timeout: data.timeout ?? 60,
     isDemo: false,
   };
+}
+
+/**
+ * Resends code via Telethon's ResendCodeRequest.
+ */
+export async function resendTelegramCode(flowId: string): Promise<SendTelegramCodeResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/telegram/resend-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flowId }),
+    });
+  } catch {
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}. Please ensure the backend is running.`);
+  }
+
+  if (res.status === 503) {
+    throw new Error('Telegram linking is not available right now. The service owner needs to finish a one-time setup.');
+  }
+
+  if (res.status === 429) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Too many resend attempts. Please wait a moment.');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Failed to resend verification code.');
+  }
+
+  const data = await res.json();
+  return {
+    flowId: data.flowId,
+    message: data.message,
+    codeType: data.codeType || 'app',
+    nextType: data.nextType || null,
+    timeout: data.timeout ?? 60,
+    isDemo: false,
+  };
+}
+
+/**
+ * Initializes a Telegram QR code login session.
+ */
+export async function startTelegramQr(): Promise<TelegramQRStartResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/telegram/qr/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch {
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}. Please ensure the backend is running.`);
+  }
+
+  if (res.status === 503) {
+    throw new Error('Telegram linking is not available right now. The service owner needs to finish a one-time setup.');
+  }
+
+  if (res.status === 429) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Too many QR login requests. Please wait 10 minutes.');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Failed to initialize QR login.');
+  }
+
+  return await res.json();
+}
+
+/**
+ * Polls status of QR login session.
+ */
+export async function getTelegramQrStatus(flowId: string): Promise<TelegramQRStatusResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/telegram/qr/status?flowId=${encodeURIComponent(flowId)}`, {
+      method: 'GET',
+    });
+  } catch {
+    throw new Error(`Cannot reach the analysis server at ${API_BASE}.`);
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || 'Failed to check QR login status.');
+  }
+
+  return await res.json();
 }
 
 /**

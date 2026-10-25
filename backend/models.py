@@ -213,6 +213,33 @@ class TelegramSendCodeRequest(AppBaseModel):
 class TelegramSendCodeResponse(AppBaseModel):
     flow_id: str = Field(..., alias="flowId")
     message: str = "Verification code requested from Telegram"
+    code_type: str = Field("app", alias="codeType")  # 'app', 'sms', 'call', 'other'
+    next_type: Optional[str] = Field(None, alias="nextType")  # 'sms', 'call', None
+    timeout: int = Field(60, alias="timeout")  # seconds
+
+
+class TelegramResendCodeRequest(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+
+
+class TelegramResendCodeResponse(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+    message: str = "Verification code resent"
+    code_type: str = Field("app", alias="codeType")
+    next_type: Optional[str] = Field(None, alias="nextType")
+    timeout: int = Field(60, alias="timeout")
+
+
+class TelegramQRStartResponse(AppBaseModel):
+    flow_id: str = Field(..., alias="flowId")
+    qr_url: str = Field(..., alias="qrUrl")
+    expires_in: int = Field(..., alias="expiresIn")
+
+
+class TelegramQRStatusResponse(AppBaseModel):
+    status: Literal["waiting", "scanned", "needsPassword", "expired"]
+    qr_url: Optional[str] = Field(None, alias="qrUrl")
+    expires_in: Optional[int] = Field(None, alias="expiresIn")
 
 
 class TelegramVerifyRequest(AppBaseModel):

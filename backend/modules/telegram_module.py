@@ -40,16 +40,61 @@ class TelegramFloodWaitException(Exception):
         self.seconds = seconds
 
 
+def map_code_type(code_type_obj: Any) -> str:
+    """Maps Telethon SentCodeType to 'app', 'sms', 'call', 'other'."""
+    if not code_type_obj:
+        return "app"
+    type_name = type(code_type_obj).__name__
+    if "App" in type_name:
+        return "app"
+    if "Sms" in type_name:
+        return "sms"
+    if "Call" in type_name:
+        return "call"
+    if "Email" in type_name:
+        return "email"
+    return "other"
+
+
+def map_next_type(next_type_obj: Any) -> Optional[str]:
+    """Maps Telethon CodeType to 'sms', 'call', or None."""
+    if not next_type_obj:
+        return None
+    type_name = type(next_type_obj).__name__
+    if "Sms" in type_name:
+        return "sms"
+    if "Call" in type_name:
+        return "call"
+    return "other"
+
+
 class TelegramFlow:
     """Represents a temporary in-memory Telegram authentication and audit flow."""
 
-    def __init__(self, flow_id: str, phone: str, client: Any, phone_code_hash: Optional[str] = None):
+    def __init__(
+        self,
+        flow_id: str,
+        phone: str,
+        client: Any,
+        phone_code_hash: Optional[str] = None,
+        code_type: str = "app",
+        next_type: Optional[str] = None,
+        timeout: int = 60,
+        is_qr: bool = False,
+    ):
         self.flow_id = flow_id
         self.phone = phone
         self.client = client
         self.phone_code_hash = phone_code_hash
+        self.code_type = code_type
+        self.next_type = next_type
+        self.timeout = timeout
+        self.sent_at = time.time()
         self.created_at = time.time()
-        self.status = "code_sent"  # 'code_sent', 'verified', 'analyzing', 'completed'
+        self.status = "code_sent"  # 'code_sent', 'waiting', 'scanned', 'needsPassword', 'verified', 'analyzing', 'completed'
+        self.is_qr = is_qr
+        self.qr_login: Any = None
+        self.qr_wait_task: Optional[asyncio.Task] = None
 
     def is_expired(self) -> bool:
         return (time.time() - self.created_at) > settings.TELEGRAM_FLOW_TTL_SECONDS
@@ -64,11 +109,14 @@ async def cleanup_expired_flows() -> None:
     expired_ids = [fid for fid, flow in _flows.items() if flow.is_expired()]
     for fid in expired_ids:
         flow = _flows.pop(fid, None)
-        if flow and flow.client:
-            try:
-                await flow.client.disconnect()
-            except Exception:
-                pass
+        if flow:
+            if flow.qr_wait_task and not flow.qr_wait_task.done():
+                flow.qr_wait_task.cancel()
+            if flow.client:
+                try:
+                    await flow.client.disconnect()
+                except Exception:
+                    pass
 
 
 def verify_telegram_configuration() -> None:
@@ -81,10 +129,10 @@ def verify_telegram_configuration() -> None:
 # Flow Step 1: Send Code
 # ---------------------------------------------------------------------------
 
-async def send_telegram_code(phone_raw: str) -> str:
+async def send_telegram_code(phone_raw: str) -> Tuple[str, str, Optional[str], int]:
     """
     Validates phone format, creates in-memory Telethon client, sends code request,
-    and returns a unique flow ID.
+    and returns (flow_id, code_type, next_type, timeout).
     """
     verify_telegram_configuration()
     await cleanup_expired_flows()
@@ -106,7 +154,10 @@ async def send_telegram_code(phone_raw: str) -> str:
 
     try:
         sent = await client.send_code_request(clean_phone)
-        phone_code_hash = sent.phone_code_hash
+        phone_code_hash = getattr(sent, "phone_code_hash", None)
+        code_type = map_code_type(getattr(sent, "type", None))
+        next_type = map_next_type(getattr(sent, "next_type", None))
+        timeout = getattr(sent, "timeout", None) or 60
     except FloodWaitError as e:
         await client.disconnect()
         raise TelegramFloodWaitException(e.seconds)
@@ -118,8 +169,177 @@ async def send_telegram_code(phone_raw: str) -> str:
         raise ValueError(f"Failed to request Telegram login code: {str(e)}")
 
     flow_id = str(uuid.uuid4())
-    _flows[flow_id] = TelegramFlow(flow_id, clean_phone, client, phone_code_hash)
-    return flow_id
+    _flows[flow_id] = TelegramFlow(
+        flow_id=flow_id,
+        phone=clean_phone,
+        client=client,
+        phone_code_hash=phone_code_hash,
+        code_type=code_type,
+        next_type=next_type,
+        timeout=timeout,
+    )
+    return flow_id, code_type, next_type, timeout
+
+
+# ---------------------------------------------------------------------------
+# Flow Step 1b: Resend Code
+# ---------------------------------------------------------------------------
+
+async def resend_telegram_code(flow_id: str) -> Tuple[str, str, Optional[str], int]:
+    """
+    Calls Telethon's ResendCodeRequest to resend verification code.
+    Only allowed after timeout has elapsed and when next_type is available.
+    """
+    verify_telegram_configuration()
+    await cleanup_expired_flows()
+
+    flow = _flows.get(flow_id)
+    if not flow or flow.is_expired():
+        raise ValueError("Invalid or expired login session. Please start over by requesting a new code.")
+
+    if not flow.phone_code_hash:
+        raise ValueError("No active verification code request found for this session.")
+
+    now = time.time()
+    elapsed = now - flow.sent_at
+    if elapsed < flow.timeout:
+        remaining = int(flow.timeout - elapsed)
+        raise ValueError(f"Please wait {remaining} seconds before requesting another code.")
+
+    if not flow.next_type:
+        raise ValueError("No alternative code delivery method is available from Telegram.")
+
+    from telethon.tl.functions.auth import ResendCodeRequest
+    from telethon.errors import FloodWaitError
+
+    try:
+        sent = await flow.client(
+            ResendCodeRequest(
+                phone_number=flow.phone,
+                phone_code_hash=flow.phone_code_hash,
+            )
+        )
+        flow.phone_code_hash = getattr(sent, "phone_code_hash", flow.phone_code_hash)
+        flow.code_type = map_code_type(getattr(sent, "type", None))
+        flow.next_type = map_next_type(getattr(sent, "next_type", None))
+        flow.timeout = getattr(sent, "timeout", None) or 60
+        flow.sent_at = time.time()
+    except FloodWaitError as e:
+        raise TelegramFloodWaitException(e.seconds)
+    except Exception as e:
+        raise ValueError(f"Failed to resend Telegram verification code: {str(e)}")
+
+    return flow.flow_id, flow.code_type, flow.next_type, flow.timeout
+
+
+# ---------------------------------------------------------------------------
+# Flow Step 1c: QR Code Linking
+# ---------------------------------------------------------------------------
+
+async def start_telegram_qr() -> Tuple[str, str, int]:
+    """
+    Creates an in-memory Telethon client, calls client.qr_login(),
+    and returns (flow_id, qr_url, expires_in).
+    """
+    verify_telegram_configuration()
+    await cleanup_expired_flows()
+
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+    from telethon.errors import FloodWaitError
+
+    client = TelegramClient(StringSession(), settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH)
+    await client.connect()
+
+    try:
+        qr = await client.qr_login()
+    except FloodWaitError as e:
+        await client.disconnect()
+        raise TelegramFloodWaitException(e.seconds)
+    except Exception as e:
+        await client.disconnect()
+        raise ValueError(f"Failed to initialize Telegram QR login: {str(e)}")
+
+    flow_id = str(uuid.uuid4())
+    expires_in = 60
+    if hasattr(qr, "expires") and qr.expires:
+        expires_in = max(1, int((qr.expires - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()))
+
+    flow = TelegramFlow(flow_id, phone="", client=client, is_qr=True)
+    flow.qr_login = qr
+    flow.status = "waiting"
+
+    async def _qr_wait_worker(flw: TelegramFlow):
+        try:
+            user = await flw.qr_login.wait()
+            flw.status = "scanned"
+            if user and getattr(user, "phone", None):
+                flw.phone = f"+{user.phone}"
+        except Exception as e:
+            from telethon.errors import SessionPasswordNeededError
+            if isinstance(e, SessionPasswordNeededError) or type(e).__name__ == "SessionPasswordNeededError":
+                flw.status = "needsPassword"
+            else:
+                logger.warning(f"Telegram QR login wait error: {e}")
+
+    flow.qr_wait_task = asyncio.create_task(_qr_wait_worker(flow))
+    _flows[flow_id] = flow
+    return flow_id, qr.url, expires_in
+
+
+async def get_telegram_qr_status(flow_id: str) -> Dict[str, Any]:
+    """
+    Polls the QR login status: waiting | scanned | needsPassword | expired.
+    Recreates QR code if expired.
+    """
+    verify_telegram_configuration()
+    flow = _flows.get(flow_id)
+    if not flow or flow.is_expired():
+        raise ValueError("Invalid or expired login session. Please start over.")
+
+    if not flow.is_qr or not flow.qr_login:
+        raise ValueError("Session is not a QR login flow.")
+
+    if flow.status in ("scanned", "needsPassword"):
+        return {"status": flow.status}
+
+    # Brief wait so in-flight scan can register
+    await asyncio.sleep(0.3)
+
+    if flow.status in ("scanned", "needsPassword"):
+        return {"status": flow.status}
+
+    now_utc = datetime.datetime.now(tz=datetime.timezone.utc)
+    if hasattr(flow.qr_login, "expires") and flow.qr_login.expires and now_utc >= flow.qr_login.expires:
+        try:
+            await flow.qr_login.recreate()
+            if flow.qr_wait_task and not flow.qr_wait_task.done():
+                flow.qr_wait_task.cancel()
+
+            async def _recreate_worker(flw: TelegramFlow):
+                try:
+                    user = await flw.qr_login.wait()
+                    flw.status = "scanned"
+                    if user and getattr(user, "phone", None):
+                        flw.phone = f"+{user.phone}"
+                except Exception as e:
+                    from telethon.errors import SessionPasswordNeededError
+                    if isinstance(e, SessionPasswordNeededError) or type(e).__name__ == "SessionPasswordNeededError":
+                        flw.status = "needsPassword"
+                    else:
+                        logger.warning(f"Telegram QR recreate wait error: {e}")
+
+            flow.qr_wait_task = asyncio.create_task(_recreate_worker(flow))
+            new_expires = max(1, int((flow.qr_login.expires - now_utc).total_seconds()))
+            return {
+                "status": "expired",
+                "qrUrl": flow.qr_login.url,
+                "expiresIn": new_expires,
+            }
+        except Exception as e:
+            logger.warning(f"Failed to recreate QR login: {e}")
+
+    return {"status": "waiting"}
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +373,21 @@ async def verify_telegram_code(flow_id: str, code: str, password: Optional[str] 
         if password:
             await client.sign_in(password=password)
             flow.status = "verified"
+            me = await client.get_me()
+            if me and getattr(me, "phone", None) and not flow.phone:
+                flow.phone = f"+{me.phone}"
             return ("verified", False)
+        elif flow.is_qr:
+            if flow.status == "scanned":
+                flow.status = "verified"
+                me = await client.get_me()
+                if me and getattr(me, "phone", None) and not flow.phone:
+                    flow.phone = f"+{me.phone}"
+                return ("verified", False)
+            elif flow.status == "needsPassword":
+                return ("needs_password", True)
+            else:
+                raise ValueError("QR code has not been scanned yet.")
         else:
             try:
                 await client.sign_in(phone=flow.phone, code=clean_code, phone_code_hash=flow.phone_code_hash)
@@ -192,16 +426,21 @@ async def analyze_telegram_account(flow_id: str) -> TelegramScanResult:
         raise ValueError("Session expired or invalid. Please request a new verification code.")
 
     if flow.status != "verified":
-        raise ValueError("Account must be successfully verified before running the investigation.")
+        if flow.is_qr and flow.status == "scanned":
+            flow.status = "verified"
+        else:
+            raise ValueError("Account must be successfully verified before running the investigation.")
 
     client = flow.client
-    phone_masked = mask_phone(flow.phone)
 
     try:
         from telethon.tl import functions
 
         # 1. Read account user info
         me = await client.get_me()
+        if not flow.phone and me and getattr(me, "phone", None):
+            flow.phone = f"+{me.phone}"
+        phone_masked = mask_phone(flow.phone) if flow.phone else "Telegram User"
         account_name = f"{me.first_name or ''} {me.last_name or ''}".strip()
         if me.username:
             account_name += f" (@{me.username})"
