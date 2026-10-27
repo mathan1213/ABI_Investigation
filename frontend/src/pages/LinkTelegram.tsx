@@ -17,7 +17,6 @@ import {
   ExternalLink,
   Info,
   Check,
-  Sparkles,
 } from 'lucide-react';
 import { Stepper, StepItem } from '../components/Stepper';
 import { Analyzing } from '../components/Analyzing';
@@ -50,7 +49,7 @@ const MAX_TOTAL_SIZE = 25 * 1024 * 1024; // 25 MB
 const MAX_FILES = 5;
 
 export const LinkTelegram: React.FC = () => {
-  const { telegramScan, setTelegramScan, loadSampleData } = useScan();
+  const { telegramScan, setTelegramScan } = useScan();
 
   const [currentStep, setCurrentStep] = useState<number>(telegramScan ? 4 : 1);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -256,14 +255,7 @@ export const LinkTelegram: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-800">
-            <button
-              onClick={loadSampleData}
-              className="text-xs text-slate-400 hover:text-slate-200 underline transition-colors"
-            >
-              Want to see how this works first? Load demo data
-            </button>
-
+          <div className="flex justify-end pt-4 border-t border-slate-800">
             <button
               onClick={() => setCurrentStep(2)}
               className="w-full sm:w-auto px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 transition-all"
@@ -419,11 +411,6 @@ export const LinkTelegram: React.FC = () => {
                   <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                     Offline Export Analysis
                   </span>
-                  {telegramScan.isDemo && (
-                    <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      Demo Data
-                    </span>
-                  )}
                   <RiskBadge level={telegramScan.riskLevel} />
                 </div>
                 <h2 className="text-2xl font-bold text-white tracking-tight">

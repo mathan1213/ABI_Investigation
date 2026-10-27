@@ -26,12 +26,10 @@ export const Navbar: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const { overallScore, overallRisk, hasAnyScan, demoModules } = useScan();
+  const { overallScore, overallRisk, hasAnyScan } = useScan();
   const { user, isAuthenticated, isAdmin, logout, deleteAccount } = useAuth();
   const navigate = useNavigate();
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  const isDemoMode = demoModules.length > 0;
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -113,19 +111,6 @@ export const Navbar: React.FC = () => {
                   </NavLink>
                 );
               })}
-
-              {/* Demo Mode Badge Only (Part A.1: Keep only a small Demo data indicator when demo data is loaded) */}
-              {isDemoMode && (
-                <div className="ml-2 pl-2 border-l border-slate-800 flex items-center">
-                  <span
-                    className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-amber-500/10 text-amber-300 border-amber-500/30 flex items-center gap-1.5"
-                    title="Simulated incident dataset is currently loaded"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                    <span>Demo data</span>
-                  </span>
-                </div>
-              )}
 
               {/* Quick Risk Score Pill */}
               {hasAnyScan && (
@@ -229,11 +214,6 @@ export const Navbar: React.FC = () => {
 
             {/* Mobile Menu Button */}
             <div className="flex items-center gap-2 md:hidden">
-              {isDemoMode && (
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border bg-amber-500/10 text-amber-300 border-amber-500/30">
-                  Demo
-                </span>
-              )}
               {hasAnyScan && (
                 <span
                   className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${

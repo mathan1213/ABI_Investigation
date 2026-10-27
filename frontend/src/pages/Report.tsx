@@ -10,7 +10,6 @@ import {
   Network,
   CheckCircle,
   Clock,
-  Sparkles,
   ArrowRight,
   ExternalLink,
   ShieldCheck,
@@ -44,10 +43,8 @@ export const Report: React.FC = () => {
     overallScore,
     overallRisk,
     hasAnyScan,
-    demoModules,
     reportData,
     isReportLoading: isLoading,
-    loadSampleData,
     addToast,
   } = useScan();
 
@@ -179,8 +176,6 @@ export const Report: React.FC = () => {
           description="We need at least one completed scan to generate your breach investigation report. You can link your Telegram, check a public GitHub repository, or test a suspicious network address."
           actionText="Link Telegram to Start"
           actionLink="/telegram"
-          secondaryActionText="Load demo data"
-          onSecondaryAction={loadSampleData}
         />
       </div>
     );
@@ -203,8 +198,7 @@ export const Report: React.FC = () => {
   const displayLimitations = reportData?.limitations || [];
   const displayMethodology =
     reportData?.methodology ||
-    'Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed real-data modules. Demo modules are strictly excluded from the overall score and the Critical-forces-High rule. If any real module contains a finding with Critical severity, the composite risk rating is elevated to at least High. Unscanned and demo modules are omitted from the computation.';
-  const isAnyDemo = (reportData?.demoModules && reportData.demoModules.length > 0) || demoModules.length > 0;
+    'Overall composite risk is computed as 50% highest individual module score plus 50% mean score across all completed real-data modules. If any module contains a finding with Critical severity, the composite risk rating is elevated to at least High. Unscanned modules are omitted from the computation.';
 
   // Chart data
   const critCount =
@@ -272,17 +266,8 @@ export const Report: React.FC = () => {
         </div>
       )}
 
-      {/* Top Banner: Includes demo data / Based on real scans */}
-      {isAnyDemo ? (
-        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3 no-print">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
-            <span className="font-semibold">Includes demo data</span>
-            <span className="text-slate-300 hidden sm:inline">— Demo modules are excluded from the composite risk score.</span>
-          </div>
-          <span className="text-[11px] font-mono bg-amber-500/20 px-2 py-0.5 rounded text-amber-200">Demo Data Active</span>
-        </div>
-      ) : hasAnyScan ? (
+      {/* Top Banner: Based on real scans */}
+      {hasAnyScan && (
         <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center justify-between gap-3 no-print">
           <div className="flex items-center gap-2">
             <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
@@ -291,7 +276,7 @@ export const Report: React.FC = () => {
           </div>
           <span className="text-[11px] font-mono bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-200">Verified Signals</span>
         </div>
-      ) : null}
+      )}
 
       {/* PRINTABLE / EXPORTABLE REPORT CONTAINER */}
       <div
@@ -322,29 +307,9 @@ export const Report: React.FC = () => {
             <RiskBadge
               level={displayRisk ?? 'low'}
               size="lg"
-              label={displayScore === null ? 'Demo Only' : undefined}
             />
           </div>
         </div>
-
-        {/* Prominent Demo Mode Banner (Visible in PDF, Print & Screen if any demo data used) */}
-        {isAnyDemo && (
-          <div className="p-4 rounded-xl bg-amber-500/10 border-2 border-amber-500/40 text-amber-300 text-xs flex items-start gap-3">
-            <AlertTriangle size={18} className="shrink-0 text-amber-400 mt-0.5" />
-            <div>
-              <span className="font-bold text-amber-200 block text-sm uppercase tracking-wide">
-                Demo Data Notice
-              </span>
-              <p className="text-slate-300 mt-0.5 leading-relaxed">
-                This investigation dossier incorporates simulated demonstration data for one or more modules{' '}
-                {reportData?.demoModules && reportData.demoModules.length > 0
-                  ? `(${reportData.demoModules.join(', ')})`
-                  : ''}
-                . Findings in demo-flagged sections are illustrative test scenarios and are excluded from the overall score.
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* Top Summary & Gauge */}
         <div className="p-6 rounded-2xl bg-[#111A2E] border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
@@ -368,11 +333,6 @@ export const Report: React.FC = () => {
 
           <div className="shrink-0 flex flex-col items-center">
             <RiskGauge score={displayScore ?? 0} level={displayRisk ?? 'low'} size="md" />
-            {displayScore === null && (
-              <span className="text-[11px] font-mono text-amber-300 mt-2 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30">
-                Demo Data Only
-              </span>
-            )}
           </div>
         </div>
 
@@ -389,11 +349,11 @@ export const Report: React.FC = () => {
           <div className="space-y-3">
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
               <ShieldCheck size={14} className="text-emerald-400" />
-              <span>Real Scanned Modules (Drive Overall Score)</span>
+              <span>Scanned Modules (Drive Overall Score)</span>
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Telegram Module (if Real) */}
-              {telegramScan && !demoModules.includes('telegram') && !telegramScan.isDemo && (
+              {/* Telegram Module */}
+              {telegramScan && (
                 <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -417,8 +377,8 @@ export const Report: React.FC = () => {
                 </div>
               )}
 
-              {/* Repo Module (if Real) */}
-              {repoScan && !demoModules.includes('repo') && !repoScan.isDemo && (
+              {/* Repo Module */}
+              {repoScan && (
                 <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -437,8 +397,8 @@ export const Report: React.FC = () => {
                 </div>
               )}
 
-              {/* Network Module (if Real) */}
-              {Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && !demoModules.includes('network') && (
+              {/* Network Module */}
+              {Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && (
                 <div className="p-4 rounded-xl bg-[#111A2E] border border-slate-800 flex flex-col justify-between space-y-3">
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -482,106 +442,15 @@ export const Report: React.FC = () => {
                 </div>
               )}
 
-              {/* Show empty placeholder if no real modules */}
-              {(!telegramScan || demoModules.includes('telegram') || telegramScan.isDemo) &&
-               (!repoScan || demoModules.includes('repo') || repoScan.isDemo) &&
-               (!Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) || demoModules.includes('network')) && (
+              {/* Show empty placeholder if no modules */}
+              {!telegramScan && !repoScan && !Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && (
                 <div className="col-span-full p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center gap-2">
                   <Info size={15} className="text-slate-500" />
-                  <span>No real modules scanned yet. Run a real scan to calculate an official overall threat score.</span>
+                  <span>No modules scanned yet. Run a scan to calculate an official overall threat score.</span>
                 </div>
               )}
             </div>
           </div>
-
-          {/* Demo Data Modules Section (Separated) */}
-          {(demoModules.length > 0 || telegramScan?.isDemo || repoScan?.isDemo) && (
-            <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                <AlertTriangle size={14} className="text-amber-400" />
-                <span>Demo Data Modules (Excluded from Overall Score)</span>
-              </h4>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Telegram Demo */}
-                {(demoModules.includes('telegram') || telegramScan?.isDemo) && telegramScan && (
-                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2 text-cyan-400 font-semibold text-xs uppercase">
-                          <Send size={14} />
-                          <span>Telegram (Demo)</span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                          Demo Data
-                        </span>
-                      </div>
-                      <h4 className="text-sm font-bold text-white mb-1">{telegramScan.phone}</h4>
-                      <p className="text-xs text-slate-300 leading-relaxed">{telegramScan.summary}</p>
-                    </div>
-                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                      {telegramScan.sessions.length} session(s) audited, {telegramScan.findings.length} finding(s)
-                    </span>
-                  </div>
-                )}
-
-                {/* Repo Demo */}
-                {demoModules.includes('repo') && repoScan && (
-                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2 text-purple-400 font-semibold text-xs uppercase">
-                          <GitBranch size={14} />
-                          <span>GitHub Code (Demo)</span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                          Demo Data
-                        </span>
-                      </div>
-                      <h4 className="text-sm font-bold text-white mb-1 truncate">{repoScan.repoName}</h4>
-                      <p className="text-xs text-slate-300 leading-relaxed">{repoScan.summary}</p>
-                    </div>
-                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                      {repoScan.counts.total} finding(s) in {repoScan.scannedFilesCount} file(s)
-                    </span>
-                  </div>
-                )}
-
-                {/* Network Demo */}
-                {demoModules.includes('network') && Boolean(networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult) && (
-                  <div className="p-4 rounded-xl bg-amber-950/10 border border-amber-500/30 flex flex-col justify-between space-y-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs uppercase">
-                          <Network size={14} />
-                          <span>Network & Web (Demo)</span>
-                        </div>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                          Demo Data
-                        </span>
-                      </div>
-                      <h4 className="text-sm font-bold text-white mb-1">
-                        {networkScan.ipResult
-                          ? networkScan.ipResult.ip
-                          : networkScan.websiteResult
-                          ? networkScan.websiteResult.domain
-                          : 'Network Target'}
-                      </h4>
-                      <p className="text-xs text-slate-300 leading-relaxed">
-                        {networkScan.ipResult
-                          ? networkScan.ipResult.explanation
-                          : networkScan.websiteResult
-                          ? networkScan.websiteResult.explanation
-                          : 'Demo network check.'}
-                      </p>
-                    </div>
-                    <span className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">
-                      {networkScan.ipResult ? `IP Abuse Threat: ${networkScan.ipResult.abuseScore}/100` : 'Demo Target'}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Section 2: Consolidated Network Findings */}
@@ -725,7 +594,7 @@ export const Report: React.FC = () => {
             </div>
             <ul className="list-disc list-inside space-y-1.5 text-slate-300 leading-relaxed">
               {displayLimitations.map((limitText, idx) => (
-                <li key={idx} className={limitText.includes('DEMO DATA') ? 'text-amber-300 font-medium' : ''}>
+                <li key={idx}>
                   {limitText}
                 </li>
               ))}

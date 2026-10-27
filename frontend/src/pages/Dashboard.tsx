@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  Sparkles,
   AlertTriangle,
 } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
@@ -41,9 +40,7 @@ export const Dashboard: React.FC = () => {
     recentScans,
     overallScore,
     overallRisk,
-    loadSampleData,
     hasAnyScan,
-    demoModules,
   } = useScan();
 
   const isTgScanned = telegramScan !== null;
@@ -53,12 +50,10 @@ export const Dashboard: React.FC = () => {
   // Telegram card values
   const tgScore = isTgScanned ? telegramScan.riskScore : null;
   const tgLevel: RiskLevel = isTgScanned ? telegramScan.riskLevel : 'low';
-  const isTgDemo = isTgScanned && (demoModules.includes('telegram') || Boolean(telegramScan.isDemo));
 
   // Repo card values
   const repoScore = isRepoScanned ? repoScan.riskScore : null;
   const repoLevel: RiskLevel = isRepoScanned ? repoScan.riskLevel : 'low';
-  const isRepoDemo = isRepoScanned && demoModules.includes('repo');
 
   // Network card values
   const netScores: number[] = [];
@@ -72,7 +67,6 @@ export const Dashboard: React.FC = () => {
       ? 'critical'
       : (netScore ?? 0) >= 50 ? 'high' : (netScore ?? 0) >= 25 ? 'medium' : 'low')
     : 'low';
-  const isNetDemo = isNetScanned && demoModules.includes('network');
   const netTitle = networkScan.ipResult
     ? networkScan.ipResult.ip
     : networkScan.websiteResult
@@ -128,15 +122,11 @@ export const Dashboard: React.FC = () => {
             <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 bg-cyan-500/10 px-2.5 py-0.5 rounded-full border border-cyan-500/20">
               Active Security Dashboard
             </span>
-            {demoModules.length > 0 ? (
-              <span className="text-xs text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-full border border-amber-500/30 font-semibold">
-                Demo Data Active ({demoModules.join(', ')})
-              </span>
-            ) : !hasAnyScan ? (
+            {!hasAnyScan && (
               <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
                 No scans performed yet
               </span>
-            ) : null}
+            )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
             Account Breach Investigation
@@ -146,15 +136,8 @@ export const Dashboard: React.FC = () => {
           </p>
         </div>
 
-        {/* Demo Helper Button */}
+        {/* Report Link */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={loadSampleData}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-cyan-300 border border-slate-700 shadow-sm transition-all"
-          >
-            <Sparkles size={14} className="text-cyan-400" />
-            <span>Load demo data</span>
-          </button>
           <Link
             to="/report"
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold transition-all shadow-glow hover:shadow-glow-lg"
@@ -165,18 +148,8 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* System Setup Banner if Telegram or Git missing */}
-      {/* Top Banner: Includes demo data / Based on real scans */}
-      {demoModules.length > 0 ? (
-        <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <AlertTriangle size={16} className="text-amber-400 shrink-0" />
-            <span className="font-semibold">Includes demo data</span>
-            <span className="text-slate-300 hidden sm:inline">— Demo modules ({demoModules.join(', ')}) are excluded from the overall risk score.</span>
-          </div>
-          <span className="text-[11px] font-mono bg-amber-500/20 px-2 py-0.5 rounded text-amber-200">Demo Data Active</span>
-        </div>
-      ) : hasAnyScan ? (
+      {/* Top Banner: Based on real scans */}
+      {hasAnyScan && (
         <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
@@ -185,7 +158,7 @@ export const Dashboard: React.FC = () => {
           </div>
           <span className="text-[11px] font-mono bg-emerald-500/20 px-2 py-0.5 rounded text-emerald-200">Verified Signals</span>
         </div>
-      ) : null}
+      )}
 
       {/* 4 Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -197,14 +170,10 @@ export const Dashboard: React.FC = () => {
           subtitle={
             overallScore !== null
               ? 'Composite risk across real scanned assets'
-              : demoModules.length > 0
-              ? 'Not enough real data to calculate an overall score'
               : 'No scans completed yet'
           }
           badgeLabel={
-            overallScore === null && demoModules.length > 0
-              ? 'Demo Only'
-              : !hasAnyScan
+            !hasAnyScan
               ? 'No Scans'
               : overallRisk === 'critical'
               ? 'Urgent Alert'
@@ -217,7 +186,7 @@ export const Dashboard: React.FC = () => {
           level={tgLevel}
           icon={Send}
           subtitle={isTgScanned ? `${telegramScan.phone} • ${telegramScan.accountName}` : 'No phone linked yet'}
-          badgeLabel={!isTgScanned ? 'Not Scanned' : isTgDemo ? 'Demo Data' : tgScore! > 50 ? 'Compromised' : 'Clean'}
+          badgeLabel={!isTgScanned ? 'Not Scanned' : tgScore! > 50 ? 'Compromised' : 'Clean'}
         />
         <StatCard
           title="Repo Security Risk"
@@ -225,7 +194,7 @@ export const Dashboard: React.FC = () => {
           level={repoLevel}
           icon={GitBranch}
           subtitle={isRepoScanned ? repoScan.repoName : 'No repository analyzed'}
-          badgeLabel={!isRepoScanned ? 'Not Scanned' : isRepoDemo ? 'Demo Data' : repoScore! > 50 ? 'Secrets Found' : 'Clean'}
+          badgeLabel={!isRepoScanned ? 'Not Scanned' : repoScore! > 50 ? 'Secrets Found' : 'Clean'}
         />
         <StatCard
           title="Network & IP Risk"
@@ -233,7 +202,7 @@ export const Dashboard: React.FC = () => {
           level={netLevel}
           icon={Network}
           subtitle={isNetScanned ? netTitle : 'No network target tested'}
-          badgeLabel={!isNetScanned ? 'Not Scanned' : isNetDemo ? 'Demo Data' : netLevel === 'critical' ? 'Hostile IP' : 'Inspected'}
+          badgeLabel={!isNetScanned ? 'Not Scanned' : netLevel === 'critical' ? 'Hostile IP' : 'Inspected'}
         />
       </div>
 
@@ -253,7 +222,7 @@ export const Dashboard: React.FC = () => {
           <div className="w-full bg-slate-900/80 rounded-xl p-3.5 border border-slate-800/80 text-xs text-slate-300">
             <p className="leading-relaxed text-center">
               {overallScore === null
-                ? 'Not enough real data to calculate an overall score. Demo modules are excluded from the score.'
+                ? 'No scans completed yet. Run a scan on your Telegram logs, code repository, or network target to calculate an overall score.'
                 : overallScore >= 75
                 ? 'Action Required: High-confidence evidence of an unauthorized login or public secret leaks.'
                 : overallScore >= 50

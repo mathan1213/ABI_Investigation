@@ -16,6 +16,18 @@ try:
 except ImportError:
     tldextract = None
 
+try:
+    import certifi
+    DEFAULT_CA_FILE = certifi.where()
+except ImportError:
+    DEFAULT_CA_FILE = None
+
+
+def create_ssl_context() -> ssl.SSLContext:
+    if DEFAULT_CA_FILE:
+        return ssl.create_default_context(cafile=DEFAULT_CA_FILE)
+    return ssl.create_default_context()
+
 from config import settings
 from models import (
     IpCheckResponse,
@@ -476,7 +488,7 @@ async def inspect_link(url_str: str) -> LinkCheckResponse:
     if final_parsed.scheme == "https" or raw_url.startswith("https://"):
         try:
             loop = asyncio.get_running_loop()
-            ctx = ssl.create_default_context()
+            ctx = create_ssl_context()
 
             def get_cert_info():
                 with socket.create_connection((final_domain, 443), timeout=3.0) as sock:
@@ -668,7 +680,7 @@ async def inspect_website(domain_str: str) -> WebsiteCheckResponse:
     ssl_invalid = False
     try:
         loop = asyncio.get_running_loop()
-        ctx = ssl.create_default_context()
+        ctx = create_ssl_context()
 
         def fetch_cert():
             with socket.create_connection((clean_domain, 443), timeout=3.0) as sock:
