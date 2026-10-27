@@ -1,8 +1,9 @@
+import json
 import pytest
 from main import app
 from database import init_db, SessionLocal
 import db_models
-from modules.auth_module import get_current_user
+from modules.auth_module import get_current_user, ALL_PERMISSIONS
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
@@ -13,10 +14,15 @@ def default_auth_override():
     mock_user = db_models.User(
         id=1,
         name="Test Investigator",
+        username="test_investigator",
+        username_lower="test_investigator",
         email="test@investigator.local",
         password_hash="hashed",
-        role="admin",
-        is_active=True
+        role="super_admin",
+        is_active=True,
+        is_email_verified=True,
+        token_version=1,
+        permissions=json.dumps(ALL_PERMISSIONS),
     )
     app.dependency_overrides[get_current_user] = lambda: mock_user
     yield

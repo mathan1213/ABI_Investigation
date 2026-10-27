@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "Account Breach Investigation API"
     ENVIRONMENT: str = "development"
+    APP_ENV: str = "development"
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -28,9 +29,24 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
-    # Initial Admin Seed Credentials
+    # Initial Super Admin Seed Credentials
     ADMIN_EMAIL: Optional[str] = "admin@breach-investigation.local"
     ADMIN_PASSWORD: Optional[str] = "AdminSecurePassword2026!"
+
+    # Email / SMTP Configuration
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM: str = "noreply@breach-investigation.local"
+
+    # Security & Policy Settings
+    OTP_EXPIRATION_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 5
+    OTP_RESEND_COOLDOWN_SECONDS: int = 60
+    OTP_HOURLY_LIMIT: int = 5
+    MAX_FAILED_LOGINS: int = 10
+    LOCKOUT_MINUTES: int = 15
 
     # Optional third-party threat intelligence keys
     ABUSEIPDB_KEY: Optional[str] = None

@@ -225,10 +225,16 @@ Configure the following in `backend/.env`:
 
 | Key Name | Default / Example | Purpose |
 | :--- | :--- | :--- |
-| `JWT_SECRET` | *(64-char random hex)* | **Required**: Secret used to sign and verify user authentication tokens. |
-| `ADMIN_EMAIL` | `admin@investigation.local` | **Required**: Email for the seeded administrator account. |
-| `ADMIN_PASSWORD` | `AdminSecretPass123!` | **Required**: Initial password for the seeded administrator account. |
+| `JWT_SECRET` | *(min 16-char secret)* | **Required**: Secret used to sign and verify user authentication tokens. |
+| `ADMIN_EMAIL` | `admin@breach-investigation.local` | **Required**: Email for the seeded super administrator account. |
+| `ADMIN_PASSWORD` | `AdminSecurePassword2026!` | **Required**: Initial password for the seeded super administrator account. |
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLite database connection string. |
+| `APP_ENV` | `development` | When set to `development` and SMTP is unconfigured, OTP verification codes print to the backend console only. |
+| `SMTP_HOST` | *(empty / optional)* | SMTP server host for real-world email OTP delivery with STARTTLS. |
+| `SMTP_PORT` | `587` | SMTP server port (default: 587). |
+| `SMTP_USER` | *(empty / optional)* | SMTP username / address. |
+| `SMTP_PASSWORD` | *(empty / optional)* | SMTP password / app password. |
+| `SMTP_FROM` | `noreply@breach-investigation.local` | Sender email address for verification codes. |
 | `ABUSEIPDB_KEY` | *(empty / optional)* | *Optional, improves accuracy*: Live crowd-sourced IP abuse reports from [abuseipdb.com](https://www.abuseipdb.com). |
 | `VIRUSTOTAL_KEY` | *(empty / optional)* | *Optional, improves accuracy*: Domain & link malware threat reputation from [virustotal.com](https://www.virustotal.com). |
 | `GITHUB_TOKEN` | *(empty / optional)* | *Optional, improves rate limits*: Increases GitHub API rate limits from 60 to 5,000 reqs/hr. |
@@ -236,6 +242,24 @@ Configure the following in `backend/.env`:
 
 > [!NOTE]
 > No Telegram API keys (`TELEGRAM_API_ID` or `TELEGRAM_API_HASH`) are required. Telegram audits are performed purely through user-uploaded forensic log exports.
+
+---
+
+## 🛡️ Authentication, Email OTP & Role-Based Access Control
+
+The platform features an enterprise-grade security model:
+1. **Unique Usernames:** User handles (3-20 characters, starting with a letter, letters/digits/_/. only) are checked in real-time via debounced queries. Uniqueness is enforced case-insensitively with a database unique index, while preserving original capitalization for display. Reserved administrative words (`admin`, `root`, `superadmin`, etc.) are blocked for registration.
+2. **Two-Step Email OTP Verification:** All user registrations and logins require a 6-digit cryptographic verification code. Codes are **never stored in plain text**; only HMAC-SHA256 digests are persisted. Codes expire in 10 minutes, lock out after 5 incorrect attempts, and have rate-limited resends (60s cooldown, 5/hour account limit).
+3. **Session Versioning (`token_version`):** Password resets, administrative promotions, and logouts bump the account's `token_version`, immediately invalidating all active JWT tokens across all sessions.
+4. **Granular Roles & Permissions:**
+   - `user`: Standard customer access to investigation modules and dossiers.
+   - `admin`: Granted specific granular capabilities (`view_users`, `disable_users`, `delete_users`, `view_scans`, `view_reports`, `export_data`, `view_activity`, `manage_admins`).
+   - `super_admin`: Seeded administrator with implicit all-access privileges and audit capabilities. Protected against accidental demotion, disabling, or deletion.
+5. **Separate Admin Portal:**
+   - Dedicated portal at `/admin/login` requiring administrative credentials + 2-step OTP.
+   - Isolated sidebar and navigation layout (independent of user navigation).
+   - 30-minute inactivity auto-logout tracking user interactions.
+   - Immutable `audit_log` tracking all privilege grants, role changes, and state transitions.
 
 ---
 

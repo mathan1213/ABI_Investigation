@@ -140,10 +140,10 @@ export const Navbar: React.FC = () => {
                     className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded-xl text-xs font-medium text-slate-200 transition-colors"
                   >
                     <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-                    <span className="max-w-[120px] truncate">{user.name}</span>
+                    <span className="max-w-[120px] truncate">{user.username || user.name}</span>
                     {isAdmin && (
                       <span className="px-1.5 py-0.2 bg-purple-500/20 text-purple-300 text-[10px] rounded font-semibold uppercase">
-                        Admin
+                        {user.role === 'super_admin' ? 'Super Admin' : 'Admin'}
                       </span>
                     )}
                     <ChevronDown className="w-3 h-3 text-slate-400" />

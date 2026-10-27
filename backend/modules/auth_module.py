@@ -1,5 +1,9 @@
 import re
 import time
+import json
+import secrets
+import hashlib
+import hmac
 import datetime
 from collections import defaultdict
 from typing import Optional
@@ -9,6 +13,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from config import settings
 from database import get_db
@@ -16,10 +21,83 @@ import db_models
 
 security_bearer = HTTPBearer(auto_error=False)
 
-# In-memory rate limiting for login: client_ip -> list of timestamps
+# In-memory IP tracking: client_ip -> list of timestamps
 _login_attempts: dict[str, list[float]] = defaultdict(list)
+_otp_requests: dict[str, list[float]] = defaultdict(list)
+_username_checks: dict[str, list[float]] = defaultdict(list)
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+USERNAME_REGEX = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.]{2,19}$")
+
+RESERVED_USERNAMES = {
+    "admin",
+    "administrator",
+    "root",
+    "support",
+    "system",
+    "null",
+    "owner",
+    "moderator",
+    "superadmin",
+}
+
+COMMON_PASSWORDS = {
+    "password",
+    "password123",
+    "12345678",
+    "123456789",
+    "qwerty123",
+    "admin123",
+    "welcome1",
+    "letmein1",
+    "iloveyou",
+    "monkey123",
+    "superman1",
+    "trustno1",
+    "sunshine1",
+    "master123",
+    "dragon123",
+    "football",
+    "baseball",
+}
+
+ALL_PERMISSIONS = [
+    "view_users",
+    "disable_users",
+    "delete_users",
+    "view_scans",
+    "view_reports",
+    "export_data",
+    "view_activity",
+    "manage_admins",
+]
+
+
+# ---------------------------------------------------------------------------
+# Validation Helpers
+# ---------------------------------------------------------------------------
+
+def validate_username(username: str) -> tuple[bool, str, Optional[str]]:
+    """
+    Checks if username is 3-20 chars, letters/digits/underscore/dot only, starts with a letter.
+    Also blocks reserved names.
+    Returns: (is_valid, message, reason) where reason in ('invalid', 'reserved', None)
+    """
+    if not username or not isinstance(username, str):
+        return False, "Username is required.", "invalid"
+
+    trimmed = username.strip()
+    if not USERNAME_REGEX.match(trimmed):
+        return (
+            False,
+            "Username must be 3-20 characters, start with a letter, and contain only letters, numbers, underscores, or dots.",
+            "invalid",
+        )
+
+    if trimmed.lower() in RESERVED_USERNAMES:
+        return False, "This username is reserved by the system. Please choose another.", "reserved"
+
+    return True, "Username is valid.", None
 
 
 def validate_email_format(email: str) -> bool:
@@ -29,8 +107,14 @@ def validate_email_format(email: str) -> bool:
 def validate_password_strength(password: str) -> tuple[bool, str]:
     if not password or len(password) < 8:
         return False, "Password must be at least 8 characters long."
+    if password.lower() in COMMON_PASSWORDS:
+        return False, "This password is too common and easily guessed. Please choose a stronger password."
     return True, ""
 
+
+# ---------------------------------------------------------------------------
+# Cryptographic & Hash Functions
+# ---------------------------------------------------------------------------
 
 def hash_password(password: str) -> str:
     pwd_bytes = password.encode("utf-8")
@@ -40,13 +124,27 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8"),
-            hashed_password.encode("utf-8")
-        )
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
     except Exception:
         return False
 
+
+def hash_otp_code(code: str) -> str:
+    return hmac.new(settings.JWT_SECRET.encode("utf-8"), code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_otp_code(input_code: str, stored_hash: str) -> bool:
+    expected_hash = hash_otp_code(input_code)
+    return hmac.compare_digest(stored_hash, expected_hash)
+
+
+def generate_otp_code() -> str:
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+# ---------------------------------------------------------------------------
+# JWT Access Tokens
+# ---------------------------------------------------------------------------
 
 def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] = None) -> str:
     to_encode = data.copy()
@@ -56,14 +154,12 @@ def create_access_token(data: dict, expires_delta: Optional[datetime.timedelta] 
     else:
         expire = now + datetime.timedelta(hours=settings.JWT_EXPIRATION_HOURS)
     to_encode.update({"exp": expire, "iat": now})
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-        return payload
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -78,17 +174,19 @@ def decode_access_token(token: str) -> dict:
         )
 
 
+# ---------------------------------------------------------------------------
+# Rate Limiting
+# ---------------------------------------------------------------------------
+
 def check_login_rate_limit(client_ip: str) -> None:
     now = time.time()
-    attempts = _login_attempts[client_ip]
-    # Keep attempts from last 60 seconds
-    valid_attempts = [t for t in attempts if now - t < 60]
+    valid_attempts = [t for t in _login_attempts[client_ip] if now - t < 60]
     _login_attempts[client_ip] = valid_attempts
 
     if len(valid_attempts) >= settings.AUTH_LOGIN_RATE_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many login attempts. Please wait 1 minute before trying again."
+            detail="Too many login attempts. Please wait 1 minute before trying again.",
         )
 
 
@@ -96,22 +194,231 @@ def record_login_attempt(client_ip: str) -> None:
     _login_attempts[client_ip].append(time.time())
 
 
-def log_activity(db: Session, action: str, user_id: Optional[int] = None, detail: Optional[str] = None):
-    try:
-        activity = db_models.ActivityLog(
-            user_id=user_id,
-            action=action,
-            detail=detail[:500] if detail else None
-        )
-        db.add(activity)
-        db.commit()
-    except Exception:
-        db.rollback()
+def check_username_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    valid_checks = [t for t in _username_checks[client_ip] if now - t < 60]
+    _username_checks[client_ip] = valid_checks
 
+    if len(valid_checks) >= 30:  # 30 per minute
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many username checks. Please wait a minute.",
+        )
+
+
+def record_username_check(client_ip: str) -> None:
+    _username_checks[client_ip].append(time.time())
+
+
+def check_otp_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    valid_requests = [t for t in _otp_requests[client_ip] if now - t < 60]
+    _otp_requests[client_ip] = valid_requests
+    if len(valid_requests) >= 15:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many verification code requests from this device. Please wait.",
+        )
+
+
+def record_otp_request(client_ip: str) -> None:
+    _otp_requests[client_ip].append(time.time())
+
+
+# ---------------------------------------------------------------------------
+# OTP Creation & Verification
+# ---------------------------------------------------------------------------
+
+def create_and_send_otp(
+    db: Session,
+    email: str,
+    purpose: str,
+    user_id: Optional[int] = None,
+    client_ip: str = "127.0.0.1",
+) -> None:
+    from modules.email_service import send_otp_email
+
+    check_otp_rate_limit(client_ip)
+    record_otp_request(client_ip)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    email_clean = email.strip().lower()
+
+    # Check 60-second cooldown per account
+    recent_otp = (
+        db.query(db_models.EmailOtp)
+        .filter(
+            db_models.EmailOtp.email == email_clean,
+            db_models.EmailOtp.purpose == purpose,
+            db_models.EmailOtp.created_at >= now - datetime.timedelta(seconds=settings.OTP_RESEND_COOLDOWN_SECONDS),
+        )
+        .first()
+    )
+    if recent_otp:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait 60 seconds before requesting another verification code.",
+        )
+
+    # Check 5 per hour per account
+    hourly_count = (
+        db.query(func.count(db_models.EmailOtp.id))
+        .filter(
+            db_models.EmailOtp.email == email_clean,
+            db_models.EmailOtp.purpose == purpose,
+            db_models.EmailOtp.created_at >= now - datetime.timedelta(hours=1),
+        )
+        .scalar()
+        or 0
+    )
+    if hourly_count >= settings.OTP_HOURLY_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many verification requests for this account. Please try again in an hour.",
+        )
+
+    # Invalidate older unused codes for the same email and purpose
+    db.query(db_models.EmailOtp).filter(
+        db_models.EmailOtp.email == email_clean,
+        db_models.EmailOtp.purpose == purpose,
+        db_models.EmailOtp.used.is_(False),
+    ).update({"used": True})
+
+    code = generate_otp_code()
+    code_hash = hash_otp_code(code)
+    expires_at = now + datetime.timedelta(minutes=settings.OTP_EXPIRATION_MINUTES)
+
+    otp_row = db_models.EmailOtp(
+        user_id=user_id,
+        email=email_clean,
+        purpose=purpose,
+        code_hash=code_hash,
+        expires_at=expires_at,
+        attempts=0,
+        used=False,
+        created_at=now,
+    )
+    db.add(otp_row)
+    db.commit()
+
+    # Send the email (prints to console in dev if SMTP unconfigured)
+    send_otp_email(to_email=email_clean, code=code, purpose=purpose)
+
+
+def verify_otp_attempt(
+    db: Session,
+    email: str,
+    purpose: str,
+    input_code: str,
+) -> tuple[bool, str]:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    email_clean = email.strip().lower()
+
+    otp = (
+        db.query(db_models.EmailOtp)
+        .filter(
+            db_models.EmailOtp.email == email_clean,
+            db_models.EmailOtp.purpose == purpose,
+            db_models.EmailOtp.used.is_(False),
+        )
+        .order_by(db_models.EmailOtp.created_at.desc())
+        .first()
+    )
+
+    if not otp:
+        return False, "No active verification code found. Please request a new code."
+
+    # Check expiration (offset-naive vs offset-aware normalization)
+    exp = otp.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=datetime.timezone.utc)
+
+    if exp < now:
+        otp.used = True
+        db.commit()
+        return False, "Verification code has expired. Please request a new code."
+
+    # Check maximum wrong attempts
+    if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
+        otp.used = True
+        db.commit()
+        return False, "Too many incorrect attempts. This code has been invalidated. Please request a new code."
+
+    if not verify_otp_code(input_code.strip(), otp.code_hash):
+        otp.attempts += 1
+        if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
+            otp.used = True
+        db.commit()
+        attempts_left = max(0, settings.OTP_MAX_ATTEMPTS - otp.attempts)
+        return False, f"Incorrect verification code. ({attempts_left} attempts remaining)."
+
+    # Code matches
+    otp.used = True
+    db.commit()
+    return True, "Verification code accepted."
+
+
+# ---------------------------------------------------------------------------
+# Account Lockout & Cleanup Helpers
+# ---------------------------------------------------------------------------
+
+def check_account_lockout(user: db_models.User) -> None:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if user.locked_until:
+        lock = user.locked_until
+        if lock.tzinfo is None:
+            lock = lock.replace(tzinfo=datetime.timezone.utc)
+        if lock > now:
+            minutes_left = max(1, int((lock - now).total_seconds() / 60))
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account is temporarily locked due to too many failed attempts. Try again in {minutes_left} minutes.",
+            )
+
+
+def record_failed_login(db: Session, user: Optional[db_models.User]) -> None:
+    if not user:
+        return
+    now = datetime.datetime.now(datetime.timezone.utc)
+    user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+    if user.failed_login_attempts >= settings.MAX_FAILED_LOGINS:
+        user.locked_until = now + datetime.timedelta(minutes=settings.LOCKOUT_MINUTES)
+    db.commit()
+
+
+def reset_failed_login(db: Session, user: db_models.User) -> None:
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
+
+
+def cleanup_unverified_accounts(db: Session) -> int:
+    """Deletes accounts unverified for > 24 hours to free up usernames and emails."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    threshold = now - datetime.timedelta(hours=24)
+    old_unverified = (
+        db.query(db_models.User)
+        .filter(
+            db_models.User.is_email_verified.is_(False),
+            db_models.User.created_at < threshold,
+        )
+        .all()
+    )
+    count = len(old_unverified)
+    for u in old_unverified:
+        db.delete(u)
+    if count > 0:
+        db.commit()
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Current User Dependency
+# ---------------------------------------------------------------------------
 
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> db_models.User:
     if not credentials:
         raise HTTPException(
@@ -142,28 +449,137 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account has been disabled. Please contact the administrator.",
         )
+
+    # Check token version for logout-everywhere / password change / promotion invalidation
+    token_ver = payload.get("token_version")
+    if token_ver is not None and token_ver != user.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session has been invalidated. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     return user
 
 
-def require_admin(current_user: db_models.User = Depends(get_current_user)) -> db_models.User:
-    if current_user.role != "admin":
+# ---------------------------------------------------------------------------
+# Permissions & Roles
+# ---------------------------------------------------------------------------
+
+def parse_permissions(perms_str: Optional[str]) -> list[str]:
+    if not perms_str:
+        return []
+    try:
+        res = json.loads(perms_str)
+        return res if isinstance(res, list) else []
+    except Exception:
+        return []
+
+
+def has_permission(user: db_models.User, perm: str) -> bool:
+    if user.role == "super_admin":
+        return True
+    if user.role == "admin":
+        return perm in parse_permissions(user.permissions)
+    return False
+
+
+def require_permission(perm: str):
+    def dependency(current_user: db_models.User = Depends(get_current_user)) -> db_models.User:
+        if current_user.role not in ("admin", "super_admin"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access forbidden: Administrator privilege required.",
+            )
+        if not has_permission(current_user, perm):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: Missing required permission '{perm}'.",
+            )
+        return current_user
+    return dependency
+
+
+def require_super_admin(current_user: db_models.User = Depends(get_current_user)) -> db_models.User:
+    if current_user.role != "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Admin privilege required."
+            detail="Access forbidden: Super administrator privilege required.",
         )
     return current_user
 
 
+def require_admin(current_user: db_models.User = Depends(get_current_user)) -> db_models.User:
+    if current_user.role not in ("admin", "super_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Administrator privilege required.",
+        )
+    return current_user
+
+
+# ---------------------------------------------------------------------------
+# Logging & Auditing
+# ---------------------------------------------------------------------------
+
+def log_activity(db: Session, action: str, user_id: Optional[int] = None, detail: Optional[str] = None):
+    try:
+        activity = db_models.ActivityLog(
+            user_id=user_id,
+            action=action,
+            detail=detail[:500] if detail else None,
+        )
+        db.add(activity)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def log_audit(
+    db: Session,
+    action: str,
+    actor: Optional[db_models.User] = None,
+    target: Optional[db_models.User] = None,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+):
+    try:
+        entry = db_models.AuditLog(
+            actor_id=actor.id if actor else None,
+            actor_email=actor.email if actor else None,
+            target_id=target.id if target else None,
+            target_email=target.email if target else None,
+            action=action,
+            before_state=json.dumps(before) if before else None,
+            after_state=json.dumps(after) if after else None,
+            created_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+        db.add(entry)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Initial Super Admin Seeder
+# ---------------------------------------------------------------------------
+
 def seed_admin_if_needed(db: Session):
-    existing_admin = db.query(db_models.User).filter(db_models.User.role == "admin").first()
-    if not existing_admin and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
+    existing_super = db.query(db_models.User).filter(db_models.User.role == "super_admin").first()
+    if not existing_super and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
         admin_user = db_models.User(
             name="System Administrator",
+            username="admin",
+            username_lower="admin",
             email=settings.ADMIN_EMAIL.strip().lower(),
             password_hash=hash_password(settings.ADMIN_PASSWORD),
-            role="admin",
-            is_active=True
+            role="super_admin",
+            is_active=True,
+            is_email_verified=True,
+            token_version=1,
+            permissions="[]",
+            needs_username_change=False,
         )
         db.add(admin_user)
         db.commit()
-        log_activity(db, "register", user_id=admin_user.id, detail="Seeded initial system administrator")
+        log_activity(db, "register", user_id=admin_user.id, detail="Seeded initial system super administrator")

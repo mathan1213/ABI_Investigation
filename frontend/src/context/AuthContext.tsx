@@ -1,12 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User } from '../lib/types';
+import { User, AdminPermission } from '../lib/types';
 import {
   getCurrentUser,
-  loginUser,
-  registerUser,
   logoutUser as apiLogout,
   deleteMyAccount as apiDeleteMyAccount,
   getAuthToken,
+  setAuthToken,
 } from '../lib/api';
 
 interface AuthContextType {
@@ -15,8 +14,11 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  isSuperAdmin: boolean;
+  hasPermission: (perm: AdminPermission | string) => boolean;
+  setAuthSession: (user: User, token: string) => void;
+  updateUserContext: (user: User) => void;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
 }
@@ -28,38 +30,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(getAuthToken());
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  useEffect(() => {
-    async function loadUser() {
-      const storedToken = getAuthToken();
-      if (!storedToken) {
-        setUser(null);
-        setIsLoading(false);
-        return;
-      }
-      try {
-        const u = await getCurrentUser();
-        setUser(u);
-        setToken(storedToken);
-      } catch {
-        setUser(null);
-        setToken(null);
-      } finally {
-        setIsLoading(false);
-      }
+  const refreshUser = async () => {
+    const storedToken = getAuthToken();
+    if (!storedToken) {
+      setUser(null);
+      setIsLoading(false);
+      return;
     }
-    loadUser();
-  }, []);
-
-  const login = async (email: string, password: string) => {
-    const res = await loginUser(email, password);
-    setUser(res.user);
-    setToken(res.token);
+    try {
+      const u = await getCurrentUser();
+      setUser(u);
+      setToken(storedToken);
+    } catch {
+      setUser(null);
+      setToken(null);
+      setAuthToken(null);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const register = async (name: string, email: string, password: string) => {
-    const res = await registerUser(name, email, password);
-    setUser(res.user);
-    setToken(res.token);
+  useEffect(() => {
+    refreshUser();
+  }, []);
+
+  const setAuthSession = (newUser: User, newToken: string) => {
+    setAuthToken(newToken);
+    setUser(newUser);
+    setToken(newToken);
+  };
+
+  const updateUserContext = (updatedUser: User) => {
+    setUser(updatedUser);
   };
 
   const logout = async () => {
@@ -75,7 +77,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const isAuthenticated = Boolean(user && token);
-  const isAdmin = Boolean(user?.role === 'admin');
+  const isAdmin = Boolean(user && (user.role === 'admin' || user.role === 'super_admin'));
+  const isSuperAdmin = Boolean(user && user.role === 'super_admin');
+
+  const hasPermission = (perm: AdminPermission | string): boolean => {
+    if (!user) return false;
+    if (user.role === 'super_admin') return true;
+    if (user.role === 'admin') {
+      return Boolean(user.permissions && user.permissions.includes(perm));
+    }
+    return false;
+  };
 
   return (
     <AuthContext.Provider
@@ -85,8 +97,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         isAuthenticated,
         isAdmin,
-        login,
-        register,
+        isSuperAdmin,
+        hasPermission,
+        setAuthSession,
+        updateUserContext,
+        refreshUser,
         logout,
         deleteAccount,
       }}

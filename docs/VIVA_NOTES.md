@@ -118,8 +118,21 @@ $$\text{Composite Score} = \text{round}\Big(0.5 \times \max(\text{Scores}) + 0.5
 ### Q13: Why is a missing HSTS header labeled "Safe" or "Low" instead of "Suspicious"?
 **Answer:** Missing HTTP hardening headers represent weak configuration, not an active attack or malicious website. Labeling popular sites like Google as "Suspicious" due to missing headers is a false positive that harms user trust. Threat verdicts ("Suspicious" / "Dangerous") are reserved for expired SSL certificates, hostile open ports, or active malware flags.
 
-### Q14: How does authentication and access control work in the platform?
-**Answer:** Users register with an email and password (minimum 8 characters). Passwords are hashed using `bcrypt`. Successful logins return a signed JWT token stored in memory/session storage. Protected endpoints validate the bearer token via FastAPI dependencies. An Admin role provides access to the `/admin` portal for platform metrics, user management, and audit logs.
+### Q14: How does authentication, two-step OTP, and granular RBAC work in the platform?
+**Answer:** The platform implements a production-grade multi-tier authentication and authorization system:
+1. **Unique Usernames & Email Validation:** Accounts require a unique username (3-20 characters, starting with a letter, letters/digits/_/. only, case-insensitive uniqueness with a database unique index, reserved names like `admin`/`root`/`superadmin` blocked) checked live via debouncing.
+2. **Mandatory Two-Step Email OTP Verification:** All registrations and logins require a 6-digit cryptographic OTP generated via Python's `secrets` module. Codes are **never stored in plain text**—only HMAC-SHA256 hashes are persisted. OTPs expire in 10 minutes, enforce a maximum of 5 failed attempts before permanent invalidation, and rate-limit resends to 60-second cooldowns and 5 per hour per account.
+3. **Session Versioning (`token_version`):** Users have an incremental `token_version` included in JWT claims. Password changes, logouts, and administrative promotions immediately bump `token_version`, instantly invalidating all active tokens across devices.
+4. **Granular RBAC & Permissions:** Three roles exist: `user`, `admin`, and `super_admin`. Regular admins hold granular permissions (`view_users`, `disable_users`, `delete_users`, `view_scans`, `view_reports`, `export_data`, `view_activity`, `manage_admins`) enforced on the backend with 403 Forbidden checks. The super admin holds all permissions implicitly and manages other administrators. An immutable `audit_log` records every administrative change with actor, action, target, and before/after diffs.
+5. **Separate Admin Experience:** Administrators access a dedicated `/admin/login` page with two-factor authentication, leading to an isolated admin dashboard with an independent layout (no user navbar) and a 30-minute inactivity auto-logout.
 
-### Q15: How does the application function if external APIs (AbuseIPDB, VirusTotal) are missing or offline?
+### Q15: How do you protect against brute-force attacks and credential stuffing?
+**Answer:** We enforce multiple defense-in-depth measures:
+- IP sliding-window rate limiting (maximum 5 login attempts per minute per client IP).
+- Account lockout: after 10 failed login attempts, the account is temporarily locked for 15 minutes.
+- Common password dictionary rejection (disallowing common passwords like `password123`, `admin123`, etc.).
+- Identical generic error responses ("Incorrect email, username or password.") for both non-existent accounts and wrong passwords to eliminate account enumeration vectors.
+- Constant-time comparison (`hmac.compare_digest`) for all OTP verification codes to prevent side-channel timing attacks.
+
+### Q16: How does the application function if external APIs (AbuseIPDB, VirusTotal) are missing or offline?
 **Answer:** The architecture is designed to fail gracefully. If threat intelligence keys are absent, the network module computes heuristic threat scores from open ports, domain age, and proxy indicators, noting the limitation in the final report. Core scanning (repo analysis, Telegram log analysis, network probes) functions completely without paid third-party APIs.

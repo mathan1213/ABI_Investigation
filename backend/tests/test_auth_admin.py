@@ -6,13 +6,15 @@ import bcrypt
 from main import app
 from database import SessionLocal
 import db_models
-from modules.auth_module import get_current_user, create_access_token
+from modules.auth_module import get_current_user, create_access_token, ALL_PERMISSIONS, hash_otp_code
 
 
 @pytest.fixture
 def clean_db():
     db = SessionLocal()
     try:
+        db.query(db_models.EmailOtp).delete()
+        db.query(db_models.AuditLog).delete()
         db.query(db_models.ActivityLog).delete()
         db.query(db_models.Report).delete()
         db.query(db_models.Scan).delete()
@@ -29,30 +31,35 @@ async def test_auth_registration_and_password_hashing(clean_db):
         # 1. Invalid email
         res = await ac.post("/api/auth/register", json={
             "name": "Alice",
+            "username": "alice_smith",
             "email": "not-an-email",
-            "password": "Password123!"
+            "password": "Password123!",
+            "consent": True
         })
         assert res.status_code == 400
 
         # 2. Short password
         res = await ac.post("/api/auth/register", json={
             "name": "Alice",
+            "username": "alice_smith",
             "email": "alice@test.com",
-            "password": "short"
+            "password": "short",
+            "consent": True
         })
         assert res.status_code == 400
 
-        # 3. Valid registration
+        # 3. Valid registration (requires OTP verification next)
         res = await ac.post("/api/auth/register", json={
             "name": "Alice Smith",
+            "username": "Alice_Smith",
             "email": "alice@test.com",
-            "password": "StrongPassword123!"
+            "password": "StrongPassword123!",
+            "consent": True
         })
         assert res.status_code == 200
         data = res.json()
-        assert "token" in data
-        assert data["user"]["email"] == "alice@test.com"
-        assert data["user"]["role"] == "user"
+        assert data["success"] is True
+        assert data["email"] == "alice@test.com"
 
         # 4. Verify password hash in DB is NOT plain text and is valid bcrypt
         db = SessionLocal()
@@ -60,48 +67,85 @@ async def test_auth_registration_and_password_hashing(clean_db):
         assert user_in_db is not None
         assert user_in_db.password_hash != "StrongPassword123!"
         assert bcrypt.checkpw("StrongPassword123!".encode("utf-8"), user_in_db.password_hash.encode("utf-8"))
+        assert user_in_db.username == "Alice_Smith"
+        assert user_in_db.username_lower == "alice_smith"
+        assert user_in_db.is_email_verified is False
         db.close()
 
-        # 5. Duplicate email rejected
+        # 5. Duplicate email rejected with 409
         res_dup = await ac.post("/api/auth/register", json={
             "name": "Alice Copy",
+            "username": "alice_copy",
             "email": "alice@test.com",
-            "password": "AnotherPassword123!"
+            "password": "AnotherPassword123!",
+            "consent": True
         })
-        assert res_dup.status_code == 400
+        assert res_dup.status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_auth_login_and_me_and_self_deletion(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Register user
-        await ac.post("/api/auth/register", json={
-            "name": "Bob Jones",
-            "email": "bob@test.com",
-            "password": "PasswordBob123!"
-        })
+    db = SessionLocal()
+    # Directly insert verified user
+    user = db_models.User(
+        name="Bob Jones",
+        username="bobjones",
+        username_lower="bobjones",
+        email="bob@test.com",
+        password_hash=bcrypt.hashpw("PasswordBob123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
+        role="user",
+        is_active=True,
+        is_email_verified=True,
+        token_version=1,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    user_id = user.id
+    db.close()
 
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Login with wrong password
         login_fail = await ac.post("/api/auth/login", json={
-            "email": "bob@test.com",
+            "identifier": "bob@test.com",
             "password": "WrongPassword!"
         })
         assert login_fail.status_code == 401
+        assert login_fail.json()["detail"] == "Incorrect email, username or password."
 
-        # Login with correct password
-        login_ok = await ac.post("/api/auth/login", json={
-            "email": "bob@test.com",
+        # Login with correct password by username
+        login_step1 = await ac.post("/api/auth/login", json={
+            "identifier": "bobjones",
             "password": "PasswordBob123!"
         })
-        assert login_ok.status_code == 200
-        token = login_ok.json()["token"]
+        assert login_step1.status_code == 200
+        assert login_step1.json()["requiresOtp"] is True
+
+        # Intercept generated OTP from test database to verify
+        db = SessionLocal()
+        otp_entry = db.query(db_models.EmailOtp).filter(db_models.EmailOtp.user_id == user_id).order_by(db_models.EmailOtp.id.desc()).first()
+        assert otp_entry is not None
+        # Overwrite hash with known code "654321"
+        known_code = "654321"
+        otp_entry.code_hash = hash_otp_code(known_code)
+        db.commit()
+        db.close()
+
+        # Step 2: verify login OTP
+        login_step2 = await ac.post("/api/auth/verify-login-otp", json={
+            "userId": user_id,
+            "code": known_code
+        })
+        assert login_step2.status_code == 200
+        token = login_step2.json()["token"]
 
         # GET /api/auth/me
         headers = {"Authorization": f"Bearer {token}"}
         me_res = await ac.get("/api/auth/me", headers=headers)
         assert me_res.status_code == 200
         assert me_res.json()["name"] == "Bob Jones"
+        assert me_res.json()["username"] == "bobjones"
 
         # DELETE /api/auth/me
         del_res = await ac.delete("/api/auth/me", headers=headers)
@@ -119,15 +163,19 @@ async def test_rbac_normal_user_gets_403_on_admin_endpoints(clean_db):
     # Create normal user
     normal_user = db_models.User(
         name="Normal User",
+        username="normal_user",
+        username_lower="normal_user",
         email="normal@test.com",
         password_hash="hash",
         role="user",
-        is_active=True
+        is_active=True,
+        is_email_verified=True,
+        token_version=1
     )
     db.add(normal_user)
     db.commit()
     db.refresh(normal_user)
-    normal_token = create_access_token({"sub": str(normal_user.id), "email": normal_user.email, "role": "user"})
+    normal_token = create_access_token({"sub": str(normal_user.id), "email": normal_user.email, "role": "user", "token_version": 1})
     db.close()
 
     headers = {"Authorization": f"Bearer {normal_token}"}
@@ -141,6 +189,8 @@ async def test_rbac_normal_user_gets_403_on_admin_endpoints(clean_db):
             ("DELETE", f"/api/admin/users/{normal_user.id}"),
             ("GET", "/api/admin/activity"),
             ("GET", "/api/admin/export/users.csv"),
+            ("GET", "/api/superadmin/admins"),
+            ("GET", "/api/superadmin/audit"),
         ]
 
         for method, endpoint in endpoints:
@@ -157,20 +207,29 @@ async def test_rbac_normal_user_gets_403_on_admin_endpoints(clean_db):
 async def test_admin_operations_and_view_activity_logging(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
     db = SessionLocal()
-    # Create admin user and a normal user
+    # Create super admin user and a normal user
     admin_user = db_models.User(
         name="Root Admin",
+        username="root_admin",
+        username_lower="root_admin",
         email="root@test.com",
         password_hash="hash",
-        role="admin",
-        is_active=True
+        role="super_admin",
+        is_active=True,
+        is_email_verified=True,
+        token_version=1,
+        permissions=json.dumps(ALL_PERMISSIONS)
     )
     target_user = db_models.User(
         name="Target User",
+        username="target_user",
+        username_lower="target_user",
         email="target@test.com",
         password_hash="hash",
         role="user",
-        is_active=True
+        is_active=True,
+        is_email_verified=True,
+        token_version=1
     )
     db.add(admin_user)
     db.add(target_user)
@@ -178,7 +237,7 @@ async def test_admin_operations_and_view_activity_logging(clean_db):
     db.refresh(admin_user)
     db.refresh(target_user)
 
-    admin_token = create_access_token({"sub": str(admin_user.id), "email": admin_user.email, "role": "admin"})
+    admin_token = create_access_token({"sub": str(admin_user.id), "email": admin_user.email, "role": "super_admin", "token_version": 1})
     db.close()
 
     headers = {"Authorization": f"Bearer {admin_token}"}
@@ -222,16 +281,26 @@ async def test_admin_operations_and_view_activity_logging(clean_db):
 @pytest.mark.asyncio
 async def test_database_hygiene_no_raw_files_or_codes_in_db(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Register user
-        reg_res = await ac.post("/api/auth/register", json={
-            "name": "Hygiene User",
-            "email": "hygiene@test.com",
-            "password": "Password123!"
-        })
-        token = reg_res.json()["token"]
-        headers = {"Authorization": f"Bearer {token}"}
+    db = SessionLocal()
+    user = db_models.User(
+        name="Hygiene User",
+        username="hygiene_user",
+        username_lower="hygiene_user",
+        email="hygiene@test.com",
+        password_hash="hash",
+        role="user",
+        is_active=True,
+        is_email_verified=True,
+        token_version=1
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = create_access_token({"sub": str(user.id), "email": user.email, "role": user.role, "token_version": 1})
+    db.close()
 
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         # Upload a chat containing a sensitive login code
         raw_code = "84729"
         chat_content = json.dumps({
@@ -262,7 +331,6 @@ async def test_database_hygiene_no_raw_files_or_codes_in_db(clean_db):
         for s in all_scans:
             assert raw_code not in s.findings_json
             assert raw_code not in s.target_label
-            # Findings must only be sanitized summaries
             findings_data = json.loads(s.findings_json)
             for item in findings_data:
                 assert "raw_file" not in item
@@ -273,4 +341,3 @@ async def test_database_hygiene_no_raw_files_or_codes_in_db(clean_db):
             assert raw_code not in (log.detail or "")
 
         db.close()
-

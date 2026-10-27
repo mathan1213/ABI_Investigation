@@ -1,12 +1,13 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import init_db, SessionLocal
 from models import HealthResponse
-from modules.auth_module import seed_admin_if_needed
+from modules.auth_module import seed_admin_if_needed, cleanup_unverified_accounts
 from routers.auth import router as auth_router
 from routers.admin import router as admin_router
+from routers.superadmin import router as superadmin_router
 from routers.network import router as network_router
 from routers.repo import router as repo_router
 from routers.telegram import router as telegram_router
@@ -15,16 +16,17 @@ from routers.report import router as report_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database tables
+    # Initialize database tables and run SQLite column migrations
     init_db()
-    
-    # Seed initial system administrator if configured
+
+    # Clean up old unverified accounts (>24h) and seed super admin if needed
     db = SessionLocal()
     try:
+        cleanup_unverified_accounts(db)
         seed_admin_if_needed(db)
     finally:
         db.close()
-    
+
     yield
 
 
@@ -46,9 +48,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Security Headers Middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # Include Routers
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(superadmin_router)
 app.include_router(network_router)
 app.include_router(repo_router)
 app.include_router(telegram_router)

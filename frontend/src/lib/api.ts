@@ -8,6 +8,10 @@ import {
   FullReport,
   User,
   AuthResponse,
+  CheckUsernameResult,
+  OtpChallengeResponse,
+  AuditLogItem,
+  EligibleUser,
   AdminOverview,
   UserDetail,
   ActivityLogItem,
@@ -34,17 +38,41 @@ export function getAuthHeaders(): Record<string, string> {
 
 async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promise<T> {
   if (res.status === 401) {
-    // If unauthorized, clear token
+    // If unauthorized on /api/auth/me, clear token
     if (res.url.includes('/api/auth/me')) {
       setAuthToken(null);
+    }
+    try {
+      const errorData = await res.json();
+      if (errorData?.detail) {
+        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
+      }
+    } catch (e: any) {
+      if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
     }
     throw new Error("Authentication required. Please log in.");
   }
   if (res.status === 403) {
+    try {
+      const errorData = await res.json();
+      if (errorData?.detail) {
+        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
+      }
+    } catch (e: any) {
+      if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
+    }
     throw new Error("Access forbidden: You do not have permission to perform this action.");
   }
   if (res.status === 429) {
-    throw new Error("Too many requests, please wait a minute");
+    try {
+      const errorData = await res.json();
+      if (errorData?.detail) {
+        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
+      }
+    } catch (e: any) {
+      if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
+    }
+    throw new Error("Too many requests, please wait a minute.");
   }
   if (!res.ok) {
     try {
@@ -67,29 +95,117 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
 }
 
 // ---------------------------------------------------------------------------
-// Authentication API
+// Authentication & Username API
 // ---------------------------------------------------------------------------
 
-export async function registerUser(name: string, email: string, password: string): Promise<AuthResponse> {
+export async function checkUsername(username: string): Promise<CheckUsernameResult> {
+  const res = await fetch(`${API_BASE}/api/auth/check-username?username=${encodeURIComponent(username)}`);
+  return await handleResponse<CheckUsernameResult>(res, "Failed to verify username availability.");
+}
+
+export async function registerUser(
+  name: string,
+  username: string,
+  email: string,
+  password: string,
+  consent: boolean = true
+): Promise<{ success: boolean; message: string; email: string; userId: number }> {
   const res = await fetch(`${API_BASE}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, username, email, password, consent }),
   });
-  const data = await handleResponse<AuthResponse>(res, "Failed to register account.");
+  return await handleResponse(res, "Failed to register account.");
+}
+
+export async function verifyEmail(email: string, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code }),
+  });
+  const data = await handleResponse<AuthResponse>(res, "Failed to verify email address.");
   setAuthToken(data.token);
   return data;
 }
 
-export async function loginUser(email: string, password: string): Promise<AuthResponse> {
+export async function resendOtp(email: string, purpose: string = "register"): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, purpose }),
+  });
+  return await handleResponse(res, "Failed to resend verification code.");
+}
+
+export async function loginUser(identifier: string, password: string): Promise<OtpChallengeResponse> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ identifier, password }),
   });
-  const data = await handleResponse<AuthResponse>(res, "Failed to log in.");
+  return await handleResponse<OtpChallengeResponse>(res, "Failed to sign in.");
+}
+
+export async function verifyLoginOtp(userId: number, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/verify-login-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, code }),
+  });
+  const data = await handleResponse<AuthResponse>(res, "Failed to verify sign in code.");
   setAuthToken(data.token);
   return data;
+}
+
+export async function adminLogin(identifier: string, password: string): Promise<OtpChallengeResponse> {
+  const res = await fetch(`${API_BASE}/api/admin/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password }),
+  });
+  return await handleResponse<OtpChallengeResponse>(res, "Administrative sign in failed.");
+}
+
+export async function adminVerifyLoginOtp(userId: number, code: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/api/admin/verify-login-otp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, code }),
+  });
+  const data = await handleResponse<AuthResponse>(res, "Failed to verify administrator code.");
+  setAuthToken(data.token);
+  return data;
+}
+
+export async function forgotPassword(email: string): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  return await handleResponse(res, "Failed to process forgot password request.");
+}
+
+export async function resetPassword(email: string, code: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code, newPassword }),
+  });
+  return await handleResponse(res, "Failed to reset password.");
+}
+
+export async function updateUsername(username: string): Promise<User> {
+  const res = await fetch(`${API_BASE}/api/auth/username`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ username }),
+  });
+  return await handleResponse<User>(res, "Failed to update username.");
 }
 
 export async function getCurrentUser(): Promise<User> {
@@ -381,5 +497,95 @@ export async function downloadUsersCsv(): Promise<void> {
   a.click();
   document.body.removeChild(a);
   window.URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// Super Admin API
+// ---------------------------------------------------------------------------
+
+export async function getSuperAdminAdmins(): Promise<{ items: User[]; availablePermissions: string[] }> {
+  const res = await fetch(`${API_BASE}/api/superadmin/admins`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load administrators list.");
+}
+
+export async function getEligibleUsers(search?: string): Promise<EligibleUser[]> {
+  const query = search ? `?search=${encodeURIComponent(search)}` : "";
+  const res = await fetch(`${API_BASE}/api/superadmin/eligible-users${query}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load eligible users.");
+}
+
+export async function createSuperAdminAdmin(data: {
+  userId?: number;
+  email?: string;
+  permissions: string[];
+}): Promise<{ success: boolean; message: string; admin: User }> {
+  const res = await fetch(`${API_BASE}/api/superadmin/admins`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify(data),
+  });
+  return await handleResponse(res, "Failed to create administrator.");
+}
+
+export async function updateAdminPermissions(
+  adminId: number,
+  permissions: string[]
+): Promise<{ success: boolean; message: string; permissions: string[] }> {
+  const res = await fetch(`${API_BASE}/api/superadmin/admins/${adminId}/permissions`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ permissions }),
+  });
+  return await handleResponse(res, "Failed to update administrator permissions.");
+}
+
+export async function updateUserRole(
+  userId: number,
+  role: string,
+  permissions?: string[]
+): Promise<{ success: boolean; message: string; user: Partial<User> }> {
+  const res = await fetch(`${API_BASE}/api/superadmin/users/${userId}/role`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ role, permissions }),
+  });
+  return await handleResponse(res, "Failed to update user role.");
+}
+
+export async function removeAdmin(adminId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/superadmin/admins/${adminId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to remove administrator.");
+}
+
+export async function getSuperAdminAuditLogs(params?: {
+  page?: number;
+  perPage?: number;
+  action?: string;
+}): Promise<{ items: AuditLogItem[]; total: number; page: number; totalPages: number }> {
+  const query = new URLSearchParams();
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.perPage) query.set("per_page", String(params.perPage));
+  if (params?.action && params.action !== "all") query.set("action", params.action);
+
+  const res = await fetch(`${API_BASE}/api/superadmin/audit?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load audit logs.");
 }
 

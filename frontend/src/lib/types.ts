@@ -231,20 +231,68 @@ export interface ToastNotification {
 }
 
 // User & Auth Types
+export type UserRole = 'user' | 'admin' | 'super_admin';
+
+export type AdminPermission =
+  | 'view_users'
+  | 'disable_users'
+  | 'delete_users'
+  | 'view_scans'
+  | 'view_reports'
+  | 'export_data'
+  | 'view_activity'
+  | 'manage_admins';
+
 export interface User {
   id: number;
   name: string;
+  username?: string | null;
   email: string;
-  role: 'user' | 'admin';
+  role: UserRole;
+  permissions?: string[];
   isActive: boolean;
+  isEmailVerified?: boolean;
+  needsUsernameChange?: boolean;
   createdAt: string;
   lastLoginAt?: string | null;
   scanCount?: number;
 }
 
+export interface CheckUsernameResult {
+  available: boolean;
+  reason: 'taken' | 'invalid' | 'reserved' | null;
+  message: string;
+}
+
+export interface OtpChallengeResponse {
+  requiresOtp: boolean;
+  userId: number;
+  emailMasked: string;
+  message: string;
+}
+
 export interface AuthResponse {
   token: string;
   user: User;
+}
+
+export interface AuditLogItem {
+  id: number;
+  actorId?: number | null;
+  actorEmail?: string | null;
+  targetId?: number | null;
+  targetEmail?: string | null;
+  action: string;
+  beforeState?: Record<string, any> | null;
+  afterState?: Record<string, any> | null;
+  createdAt: string;
+}
+
+export interface EligibleUser {
+  id: number;
+  name: string;
+  username?: string | null;
+  email: string;
 }
 
 // Admin Types
