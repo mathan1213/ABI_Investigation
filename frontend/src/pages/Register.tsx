@@ -481,9 +481,16 @@ export const Register: React.FC = () => {
                 ))}
               </div>
 
-              <p className="text-[11px] text-center text-slate-400">
-                Code expires in 10 minutes. If you don&apos;t see it, check your spam folder.
-              </p>
+              <div className="space-y-2 text-center">
+                <p className="text-[11px] text-slate-400">
+                  Code expires in 10 minutes. If you don&apos;t see it, check your spam folder.
+                </p>
+                <div className="p-2.5 bg-cyan-950/30 border border-cyan-800/30 rounded-xl">
+                  <p className="text-[11px] text-cyan-300/90 leading-relaxed">
+                    <span className="font-semibold text-cyan-200">Local Testing Note:</span> If SMTP / Resend is unconfigured in <code className="bg-slate-900 px-1 py-0.5 rounded text-cyan-300">backend/.env</code>, the OTP verification code is printed directly in your backend terminal console.
+                  </p>
+                </div>
+              </div>
 
               <button
                 type="submit"

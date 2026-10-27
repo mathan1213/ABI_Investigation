@@ -282,6 +282,12 @@ export const AdminLogin: React.FC = () => {
                 ))}
               </div>
 
+              <div className="p-2.5 bg-purple-950/30 border border-purple-800/30 rounded-xl text-center">
+                <p className="text-[11px] text-purple-300/90 leading-relaxed">
+                  <span className="font-semibold text-purple-200">Local Testing Note:</span> If SMTP / Resend is unconfigured in <code className="bg-slate-900 px-1 py-0.5 rounded text-purple-300">backend/.env</code>, the OTP verification code is printed directly in your backend terminal console.
+                </p>
+              </div>
+
               <button
                 type="submit"
                 disabled={isVerifyingOtp || otp.join('').length !== 6}

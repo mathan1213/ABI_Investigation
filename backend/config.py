@@ -33,12 +33,14 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: Optional[str] = "admin@breach-investigation.local"
     ADMIN_PASSWORD: Optional[str] = "AdminSecurePassword2026!"
 
-    # Email / SMTP Configuration
+    # Email / SMTP / Resend Configuration
     SMTP_HOST: Optional[str] = None
     SMTP_PORT: int = 587
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
     SMTP_FROM: str = "noreply@breach-investigation.local"
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM: Optional[str] = "onboarding@resend.dev"
 
     # Security & Policy Settings
     OTP_EXPIRATION_MINUTES: int = 10

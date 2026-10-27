@@ -1,4 +1,5 @@
 import smtplib
+import httpx
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
@@ -14,8 +15,8 @@ PURPOSE_PHRASES = {
 
 def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
     """
-    Sends a 6-digit OTP email using SMTP with STARTTLS.
-    If SMTP is unconfigured and APP_ENV is development, prints the code to stdout only.
+    Sends a 6-digit OTP email using Resend API or SMTP with STARTTLS.
+    If Resend and SMTP are unconfigured and APP_ENV is development, prints the code to stdout only.
     Otherwise raises 503 Service Unavailable.
     Never exposes the code in any API response.
     """
@@ -64,6 +65,36 @@ def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
 </body>
 </html>"""
 
+    # 1. Try Resend API (https://resend.com) if configured
+    if settings.RESEND_API_KEY and settings.RESEND_API_KEY.strip():
+        try:
+            sender = settings.RESEND_FROM or settings.SMTP_FROM or "onboarding@resend.dev"
+            if "@breach-investigation.local" in sender or "@example.com" in sender:
+                sender = "onboarding@resend.dev"
+
+            with httpx.Client(timeout=10.0) as client:
+                res = client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {settings.RESEND_API_KEY.strip()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "from": sender,
+                        "to": [to_email],
+                        "subject": subject,
+                        "html": html_body,
+                        "text": text_body,
+                    },
+                )
+                if res.status_code in (200, 201):
+                    return True
+                else:
+                    print(f"[RESEND ERROR] Status {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[RESEND EXCEPTION] {e}")
+
+    # 2. Try SMTP with STARTTLS if configured
     if settings.SMTP_HOST and settings.SMTP_HOST.strip():
         try:
             msg = MIMEMultipart("alternative")
@@ -93,7 +124,7 @@ def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
                 detail="Email delivery service is currently unavailable. Please contact the administrator."
             )
 
-    # SMTP not configured
+    # 3. Development Fallback: print to console
     is_dev = settings.APP_ENV.lower() in ("development", "dev") or settings.ENVIRONMENT.lower() in ("development", "dev")
     if is_dev:
         print(f"[DEV ONLY] OTP for {to_email} ({purpose}): {code}")
