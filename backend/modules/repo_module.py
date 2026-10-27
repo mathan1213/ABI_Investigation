@@ -221,6 +221,26 @@ async def fetch_github_metadata(owner: str, repo: str) -> Optional[Dict[str, Any
 # Shallow Clone
 # ---------------------------------------------------------------------------
 
+def _run_subprocess_sync(cmd: List[str], timeout: Optional[float] = None) -> Tuple[int, bytes, bytes]:
+    """Runs a subprocess synchronously in a thread. Fully compatible with all event loops on Windows/Linux."""
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = "echo"
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            env=env
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        raise asyncio.TimeoutError()
+    except FileNotFoundError:
+        raise
+
+
 async def clone_repository(repo_url: str, branch: Optional[str], target_dir: str) -> str:
     """
     Performs a safe, shallow clone without git hooks or submodules.
@@ -241,47 +261,31 @@ async def clone_repository(repo_url: str, branch: Optional[str], target_dir: str
     cmd = base_cmd + (["--branch", branch] if branch else []) + [repo_url, target_dir]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=settings.REPO_CLONE_TIMEOUT_SECONDS
+            returncode, stdout, stderr = await asyncio.to_thread(
+                _run_subprocess_sync,
+                cmd,
+                settings.REPO_CLONE_TIMEOUT_SECONDS
             )
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
             raise ValueError("Git clone operation timed out after 60 seconds.")
 
         # If branch-specific clone failed (e.g. branch doesn't exist), retry without --branch to clone default HEAD
-        if proc.returncode != 0 and branch:
+        if returncode != 0 and branch:
             if os.path.exists(target_dir):
                 shutil.rmtree(target_dir, onerror=remove_readonly)
 
             cmd_fallback = base_cmd + [repo_url, target_dir]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd_fallback,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=settings.REPO_CLONE_TIMEOUT_SECONDS
+                returncode, stdout, stderr = await asyncio.to_thread(
+                    _run_subprocess_sync,
+                    cmd_fallback,
+                    settings.REPO_CLONE_TIMEOUT_SECONDS
                 )
             except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
                 raise ValueError("Git clone operation timed out after 60 seconds.")
 
-        if proc.returncode != 0:
+        if returncode != 0:
             err_text = stderr.decode(errors="replace").strip()
             if "Repository not found" in err_text or "not found" in err_text.lower():
                 raise ValueError(
@@ -297,13 +301,12 @@ async def clone_repository(repo_url: str, branch: Optional[str], target_dir: str
     # Detect the actual checked out branch
     actual_branch = branch or "main"
     try:
-        rev_proc = await asyncio.create_subprocess_exec(
-            "git", "-C", target_dir, "rev-parse", "--abbrev-ref", "HEAD",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        rev_rc, rev_out, _ = await asyncio.to_thread(
+            _run_subprocess_sync,
+            ["git", "-C", target_dir, "rev-parse", "--abbrev-ref", "HEAD"],
+            10.0
         )
-        rev_out, _ = await rev_proc.communicate()
-        if rev_proc.returncode == 0:
+        if rev_rc == 0:
             detected = rev_out.decode().strip()
             if detected and detected != "HEAD":
                 actual_branch = detected
@@ -493,12 +496,11 @@ async def run_bandit_scanner(clone_dir: str) -> List[RepoFinding]:
     cmd = [sys.executable, "-m", "bandit", "-r", clone_dir, "-f", "json", "-q"]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        rc, stdout, _ = await asyncio.to_thread(
+            _run_subprocess_sync,
+            cmd,
+            35.0
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=35.0)
         output_str = stdout.decode(errors="replace").strip()
         if output_str:
             data = json.loads(output_str)
