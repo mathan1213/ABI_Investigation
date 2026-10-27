@@ -91,153 +91,168 @@ export const Navbar: React.FC = () => {
             </Link>
 
             {/* Desktop Navigation */}
-            <div className="hidden md:flex items-center gap-1 lg:gap-2">
-              {navLinks.map((link) => {
-                const Icon = link.icon;
-                return (
-                  <NavLink
-                    key={link.to}
-                    to={link.to}
-                    className={({ isActive }) =>
-                      `px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 ${
-                        isActive
-                          ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-glow'
-                          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                      }`
-                    }
-                  >
-                    <Icon size={14} />
-                    <span>{link.label}</span>
-                  </NavLink>
-                );
-              })}
+            {isAuthenticated && user ? (
+              <div className="hidden md:flex items-center gap-1 lg:gap-2">
+                {navLinks.map((link) => {
+                  const Icon = link.icon;
+                  return (
+                    <NavLink
+                      key={link.to}
+                      to={link.to}
+                      className={({ isActive }) =>
+                        `px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 ${
+                          isActive
+                            ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-glow'
+                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                        }`
+                      }
+                    >
+                      <Icon size={14} />
+                      <span>{link.label}</span>
+                    </NavLink>
+                  );
+                })}
 
-              {/* Quick Risk Score Pill */}
-              {hasAnyScan && (
-                <div className="flex items-center gap-1.5 pl-2">
-                  <span className="text-[11px] text-slate-400">Risk:</span>
+                {/* Quick Risk Score Pill */}
+                {hasAnyScan && (
+                  <div className="flex items-center gap-1.5 pl-2">
+                    <span className="text-[11px] text-slate-400">Risk:</span>
+                    <span
+                      className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                        overallRisk === 'critical'
+                          ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                          : overallRisk === 'high'
+                          ? 'bg-orange-500/10 border-orange-500/30 text-orange-400'
+                          : overallRisk === 'medium'
+                          ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                          : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      }`}
+                    >
+                      {overallScore}/100
+                    </span>
+                  </div>
+                )}
+
+                {/* User Account Menu */}
+                <div className="ml-2 pl-3 border-l border-slate-800 relative" ref={dropdownRef}>
+                  <button
+                    onClick={() => setUserDropdownOpen(!userDropdownOpen)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded-xl text-xs font-medium text-slate-200 transition-colors"
+                  >
+                    <UserIcon className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="max-w-[120px] truncate">{user.name}</span>
+                    {isAdmin && (
+                      <span className="px-1.5 py-0.2 bg-purple-500/20 text-purple-300 text-[10px] rounded font-semibold uppercase">
+                        Admin
+                      </span>
+                    )}
+                    <ChevronDown className="w-3 h-3 text-slate-400" />
+                  </button>
+
+                  {/* User Dropdown */}
+                  {userDropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-56 bg-[#111827] border border-slate-800 rounded-xl shadow-2xl py-2 z-50 text-xs">
+                      <div className="px-4 py-2 border-b border-slate-800/80">
+                        <p className="font-semibold text-white truncate">{user.name}</p>
+                        <p className="text-[11px] text-slate-400 truncate">{user.email}</p>
+                      </div>
+
+                      {isAdmin && (
+                        <div className="py-1 border-b border-slate-800/80">
+                          <Link
+                            to="/admin"
+                            onClick={() => setUserDropdownOpen(false)}
+                            className="w-full flex items-center gap-2.5 px-4 py-2 text-purple-300 hover:bg-purple-950/30 transition-colors font-medium"
+                          >
+                            <Shield className="w-3.5 h-3.5" />
+                            Admin Dashboard
+                          </Link>
+                        </div>
+                      )}
+
+                      <div className="py-1">
+                        <button
+                          onClick={handleLogout}
+                          className="w-full flex items-center gap-2.5 px-4 py-2 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          Log out
+                        </button>
+                        <button
+                          onClick={() => {
+                            setUserDropdownOpen(false);
+                            setShowDeleteModal(true);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-4 py-2 text-red-400 hover:bg-red-950/30 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete my account
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="hidden md:flex items-center gap-2">
+                <Link
+                  to="/login"
+                  className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors"
+                >
+                  Sign In
+                </Link>
+                <Link
+                  to="/register"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium transition-colors"
+                >
+                  Register
+                </Link>
+              </div>
+            )}
+
+            {/* Mobile Header Right */}
+            {isAuthenticated && user ? (
+              <div className="flex items-center gap-2 md:hidden">
+                {hasAnyScan && (
                   <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
                       overallRisk === 'critical'
                         ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                        : overallRisk === 'high'
-                        ? 'bg-orange-500/10 border-orange-500/30 text-orange-400'
-                        : overallRisk === 'medium'
-                        ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                        : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
                     }`}
                   >
                     {overallScore}/100
                   </span>
-                </div>
-              )}
-
-              {/* User Account Menu / Auth Buttons */}
-              <div className="ml-2 pl-3 border-l border-slate-800 relative" ref={dropdownRef}>
-                {isAuthenticated && user ? (
-                  <div>
-                    <button
-                      onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 rounded-xl text-xs font-medium text-slate-200 transition-colors"
-                    >
-                      <UserIcon className="w-3.5 h-3.5 text-blue-400" />
-                      <span className="max-w-[120px] truncate">{user.name}</span>
-                      {isAdmin && (
-                        <span className="px-1.5 py-0.2 bg-purple-500/20 text-purple-300 text-[10px] rounded font-semibold uppercase">
-                          Admin
-                        </span>
-                      )}
-                      <ChevronDown className="w-3 h-3 text-slate-400" />
-                    </button>
-
-                    {/* User Dropdown */}
-                    {userDropdownOpen && (
-                      <div className="absolute right-0 mt-2 w-56 bg-[#111827] border border-slate-800 rounded-xl shadow-2xl py-2 z-50 text-xs">
-                        <div className="px-4 py-2 border-b border-slate-800/80">
-                          <p className="font-semibold text-white truncate">{user.name}</p>
-                          <p className="text-[11px] text-slate-400 truncate">{user.email}</p>
-                        </div>
-
-                        {isAdmin && (
-                          <div className="py-1 border-b border-slate-800/80">
-                            <Link
-                              to="/admin"
-                              onClick={() => setUserDropdownOpen(false)}
-                              className="w-full flex items-center gap-2.5 px-4 py-2 text-purple-300 hover:bg-purple-950/30 transition-colors font-medium"
-                            >
-                              <Shield className="w-3.5 h-3.5" />
-                              Admin Dashboard
-                            </Link>
-                          </div>
-                        )}
-
-                        <div className="py-1">
-                          <button
-                            onClick={handleLogout}
-                            className="w-full flex items-center gap-2.5 px-4 py-2 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
-                          >
-                            <LogOut className="w-3.5 h-3.5" />
-                            Log out
-                          </button>
-                          <button
-                            onClick={() => {
-                              setUserDropdownOpen(false);
-                              setShowDeleteModal(true);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-4 py-2 text-red-400 hover:bg-red-950/30 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            Delete my account
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <Link
-                      to="/login"
-                      className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors"
-                    >
-                      Sign In
-                    </Link>
-                    <Link
-                      to="/register"
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium transition-colors"
-                    >
-                      Register
-                    </Link>
-                  </div>
                 )}
-              </div>
-            </div>
-
-            {/* Mobile Menu Button */}
-            <div className="flex items-center gap-2 md:hidden">
-              {hasAnyScan && (
-                <span
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                    overallRisk === 'critical'
-                      ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                      : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
-                  }`}
+                <button
+                  onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                  className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
+                  aria-label="Toggle navigation menu"
                 >
-                  {overallScore}/100
-                </span>
-              )}
-              <button
-                onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
-                aria-label="Toggle navigation menu"
-              >
-                {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
-              </button>
-            </div>
+                  {mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 md:hidden">
+                <Link
+                  to="/login"
+                  className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors"
+                >
+                  Sign In
+                </Link>
+                <Link
+                  to="/register"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium transition-colors"
+                >
+                  Register
+                </Link>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Mobile Dropdown */}
-        {mobileMenuOpen && (
+        {isAuthenticated && user && mobileMenuOpen && (
           <div className="md:hidden bg-[#0B1220] border-b border-slate-800 px-4 pt-2 pb-4 space-y-1">
             {navLinks.map((link) => {
               const Icon = link.icon;
@@ -260,59 +275,38 @@ export const Navbar: React.FC = () => {
               );
             })}
 
-            {isAuthenticated && user && (
-              <div className="pt-3 border-t border-slate-800 space-y-1 text-sm">
-                <div className="px-3 py-1 text-slate-400 text-xs">
-                  Signed in as <span className="text-white font-medium">{user.name}</span>
-                </div>
-                {isAdmin && (
-                  <Link
-                    to="/admin"
-                    onClick={() => setMobileMenuOpen(false)}
-                    className="flex items-center gap-3 px-3 py-2 rounded-xl text-purple-300 hover:bg-purple-950/30"
-                  >
-                    <Shield size={16} />
-                    <span>Admin Dashboard</span>
-                  </Link>
-                )}
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-300 hover:bg-slate-800"
-                >
-                  <LogOut size={16} />
-                  <span>Log out</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                    setShowDeleteModal(true);
-                  }}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-red-400 hover:bg-red-950/30"
-                >
-                  <Trash2 size={16} />
-                  <span>Delete my account</span>
-                </button>
+            <div className="pt-3 border-t border-slate-800 space-y-1 text-sm">
+              <div className="px-3 py-1 text-slate-400 text-xs">
+                Signed in as <span className="text-white font-medium">{user.name}</span>
               </div>
-            )}
-
-            {!isAuthenticated && (
-              <div className="pt-3 border-t border-slate-800 flex gap-2">
+              {isAdmin && (
                 <Link
-                  to="/login"
+                  to="/admin"
                   onClick={() => setMobileMenuOpen(false)}
-                  className="flex-1 py-2 text-center text-xs font-medium text-slate-300 bg-slate-800 rounded-xl"
+                  className="flex items-center gap-3 px-3 py-2 rounded-xl text-purple-300 hover:bg-purple-950/30"
                 >
-                  Sign In
+                  <Shield size={16} />
+                  <span>Admin Dashboard</span>
                 </Link>
-                <Link
-                  to="/register"
-                  onClick={() => setMobileMenuOpen(false)}
-                  className="flex-1 py-2 text-center text-xs font-medium text-white bg-blue-600 rounded-xl"
-                >
-                  Register
-                </Link>
-              </div>
-            )}
+              )}
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-slate-300 hover:bg-slate-800"
+              >
+                <LogOut size={16} />
+                <span>Log out</span>
+              </button>
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setShowDeleteModal(true);
+                }}
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-red-400 hover:bg-red-950/30"
+              >
+                <Trash2 size={16} />
+                <span>Delete my account</span>
+              </button>
+            </div>
           </div>
         )}
       </nav>
