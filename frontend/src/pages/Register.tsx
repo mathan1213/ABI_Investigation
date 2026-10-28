@@ -93,8 +93,14 @@ export const Register: React.FC = () => {
           setUsernameMessage(res.message);
         }
       } catch {
-        setUsernameStatus('idle');
-        setUsernameMessage('');
+        // If backend check fails (e.g. backend offline or network error), fallback to client-side format validation
+        if (/^[a-zA-Z][a-zA-Z0-9_.]{2,19}$/.test(trimmed)) {
+          setUsernameStatus('available');
+          setUsernameMessage('Username format is valid');
+        } else {
+          setUsernameStatus('invalid');
+          setUsernameMessage('3-20 characters: letters, digits, underscores, dots. Must start with letter.');
+        }
       }
     }, 400);
 
@@ -123,36 +129,69 @@ export const Register: React.FC = () => {
     e.preventDefault();
     setFormError(null);
 
-    if (!name.trim()) {
-      setFormError('Please provide your name.');
+    const trimmedName = name.trim();
+    const trimmedUsername = username.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedName) {
+      setFormError('Please enter your full name.');
       return;
     }
-    if (usernameStatus !== 'available') {
-      setFormError('Please enter a valid, available username.');
+
+    if (!trimmedUsername) {
+      setFormError('Please choose a username.');
       return;
     }
-    if (!email.trim() || !email.includes('@')) {
+
+    if (usernameStatus === 'checking') {
+      setFormError('Please wait a moment while username availability is checked.');
+      return;
+    }
+
+    if (usernameStatus === 'taken') {
+      setFormError('This username is already taken. Please try another.');
+      return;
+    }
+
+    if (usernameStatus === 'reserved') {
+      setFormError('This username is reserved. Please choose another.');
+      return;
+    }
+
+    if (!/^[a-zA-Z][a-zA-Z0-9_.]{2,19}$/.test(trimmedUsername)) {
+      setFormError('Username must be 3-20 characters, start with a letter, and use only letters, digits, underscores, or dots.');
+      return;
+    }
+
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       setFormError('Please provide a valid email address.');
       return;
     }
+
     if (password.length < 8) {
       setFormError('Password must be at least 8 characters long.');
       return;
     }
+
     if (!consentAgreed) {
-      setFormError('You must agree to the data storage terms to register.');
+      setFormError('Please agree to the data storage and privacy terms by checking the box below.');
       return;
     }
 
     setIsLoading(true);
     try {
-      await registerUser(name.trim(), username.trim(), email.trim(), password, consentAgreed);
+      await registerUser(trimmedName, trimmedUsername, trimmedEmail, password, consentAgreed);
       setStep('otp');
       setResendCountdown(60);
       setOtp(['', '', '', '', '', '']);
       setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
     } catch (err: any) {
-      setFormError(err?.message || 'Registration failed. Please check your inputs.');
+      const msg = err?.message || '';
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed')) {
+        setFormError('Unable to connect to the backend server. Please make sure the backend is running at http://127.0.0.1:8000.');
+      } else {
+        setFormError(msg || 'Registration failed. Please check your inputs.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -229,14 +268,6 @@ export const Register: React.FC = () => {
       setIsResending(false);
     }
   };
-
-  const isRegisterDisabled =
-    isLoading ||
-    !name.trim() ||
-    usernameStatus !== 'available' ||
-    !email.trim() ||
-    password.length < 8 ||
-    !consentAgreed;
 
   return (
     <div className="min-h-[calc(100vh-140px)] flex items-center justify-center px-4 py-12">
@@ -407,8 +438,8 @@ export const Register: React.FC = () => {
 
               <button
                 type="submit"
-                disabled={isRegisterDisabled}
-                className="w-full mt-3 py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-xl text-sm transition-all duration-150 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 cursor-pointer disabled:cursor-not-allowed"
+                disabled={isLoading}
+                className="w-full mt-3 py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:opacity-60 text-white font-medium rounded-xl text-sm transition-all duration-150 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 cursor-pointer disabled:cursor-not-allowed"
               >
                 {isLoading ? (
                   <>
