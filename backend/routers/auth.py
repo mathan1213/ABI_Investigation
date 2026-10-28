@@ -20,14 +20,12 @@ from modules.auth_module import (
     create_access_token,
     get_current_user,
     log_activity,
-    create_and_send_otp,
-    verify_otp_attempt,
     check_account_lockout,
     record_failed_login,
     reset_failed_login,
-    cleanup_unverified_accounts,
     parse_permissions,
 )
+from modules.email_service import send_welcome_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -38,33 +36,20 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 class RegisterRequest(BaseModel):
     name: str
-    username: str
+    username: Optional[str] = None
     email: str
     password: str
     consent: bool = False
 
-class VerifyEmailRequest(BaseModel):
-    email: str
-    code: str
-
-class ResendOtpRequest(BaseModel):
-    email: str
-    purpose: str = "register"
-
 class LoginRequest(BaseModel):
     identifier: str  # Email or username
     password: str
-
-class VerifyLoginOtpRequest(BaseModel):
-    userId: int
-    code: str
 
 class ForgotPasswordRequest(BaseModel):
     email: str
 
 class ResetPasswordRequest(BaseModel):
     email: str
-    code: str
     newPassword: str
 
 class UpdateUsernameRequest(BaseModel):
@@ -78,7 +63,7 @@ class UserResponse(BaseModel):
     role: str
     permissions: list[str] = []
     is_active: bool
-    is_email_verified: bool
+    is_email_verified: bool = True
     needs_username_change: bool = False
     created_at: datetime.datetime
     last_login_at: Optional[datetime.datetime] = None
@@ -109,7 +94,7 @@ def to_user_response(user: db_models.User) -> UserResponse:
         role=user.role,
         permissions=parse_permissions(user.permissions),
         is_active=user.is_active,
-        is_email_verified=user.is_email_verified,
+        is_email_verified=bool(user.is_email_verified),
         needs_username_change=bool(user.needs_username_change),
         created_at=user.created_at,
         last_login_at=user.last_login_at,
@@ -162,13 +147,8 @@ def register(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    client_ip = request.client.host if request.client else "127.0.0.1"
-
-    # Purge old unverified accounts (>24h)
-    cleanup_unverified_accounts(db)
-
     name = req.name.strip()
-    username = req.username.strip()
+    raw_username = (req.username or "").strip()
     email = req.email.strip().lower()
     password = req.password
 
@@ -176,11 +156,6 @@ def register(
         raise HTTPException(status_code=400, detail="Name is required.")
     if not req.consent:
         raise HTTPException(status_code=400, detail="You must agree to the data storage and privacy terms to register.")
-
-    # Validate username
-    is_valid_u, u_msg, u_reason = validate_username(username)
-    if not is_valid_u:
-        raise HTTPException(status_code=400, detail=u_msg)
 
     # Validate email
     if not validate_email_format(email):
@@ -191,14 +166,24 @@ def register(
     if not is_strong:
         raise HTTPException(status_code=400, detail=p_msg)
 
-    # Uniqueness checks
-    existing_u = db.query(db_models.User).filter(db_models.User.username_lower == username.lower()).first()
-    if existing_u:
-        raise HTTPException(status_code=409, detail="This username is already taken, try another.")
+    # Validate username if provided, else generate one from email prefix
+    if raw_username:
+        is_valid_u, u_msg, u_reason = validate_username(raw_username)
+        if not is_valid_u:
+            raise HTTPException(status_code=400, detail=u_msg)
+        username = raw_username
+    else:
+        prefix = email.split("@")[0]
+        username = prefix[:20] if len(prefix) >= 3 else f"user_{prefix}"
 
+    # Uniqueness checks
     existing_e = db.query(db_models.User).filter(db_models.User.email == email).first()
     if existing_e:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    existing_u = db.query(db_models.User).filter(db_models.User.username_lower == username.lower()).first()
+    if existing_u:
+        raise HTTPException(status_code=409, detail="This username is already taken, try another.")
 
     try:
         user = db_models.User(
@@ -208,8 +193,8 @@ def register(
             email=email,
             password_hash=hash_password(password),
             role="user",
-            is_active=False,
-            is_email_verified=False,
+            is_active=True,
+            is_email_verified=True,
             token_version=1,
             permissions="[]",
             needs_username_change=False,
@@ -219,65 +204,22 @@ def register(
         db.refresh(user)
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="This username or email is already taken. Please try another.")
+        raise HTTPException(status_code=409, detail="An account with this username or email already exists.")
 
-    log_activity(db, "register_pending", user_id=user.id, detail=f"Registered pending verification for {email}")
+    log_activity(db, "register", user_id=user.id, detail=f"Registered account for {email}")
 
-    # Send registration OTP
-    create_and_send_otp(db, email=email, purpose="register", user_id=user.id, client_ip=client_ip)
+    # Send Welcome Email notification asynchronously via Gmail SMTP (never blocks)
+    send_welcome_email(to_email=email, user_name=name)
 
     return {
         "success": True,
-        "message": f"Verification code sent to {mask_email(email)}.",
+        "message": "Account created successfully. Please sign in with your email and password.",
         "email": email,
         "userId": user.id,
     }
 
 
-@router.post("/verify-email", response_model=AuthResponse)
-def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)):
-    email = req.email.strip().lower()
-    user = db.query(db_models.User).filter(db_models.User.email == email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Account not found. Please register first.")
-
-    verified, msg = verify_otp_attempt(db, email=email, purpose="register", input_code=req.code)
-    if not verified:
-        raise HTTPException(status_code=400, detail=msg)
-
-    user.is_email_verified = True
-    user.is_active = True
-    user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
-    db.commit()
-
-    log_activity(db, "verify_email", user_id=user.id, detail=f"User {email} verified email and activated account")
-
-    token = create_access_token({
-        "sub": str(user.id),
-        "email": user.email,
-        "role": user.role,
-        "token_version": user.token_version,
-    })
-
-    return AuthResponse(token=token, user=to_user_response(user))
-
-
-@router.post("/resend-otp")
-def resend_otp(req: ResendOtpRequest, request: Request, db: Session = Depends(get_db)):
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    email = req.email.strip().lower()
-    user = db.query(db_models.User).filter(db_models.User.email == email).first()
-
-    # For login / password_reset, if user not found, don't leak information
-    if not user and req.purpose in ("login", "admin_login", "password_reset"):
-        return {"success": True, "message": "If an account exists, a new verification code has been sent."}
-
-    user_id = user.id if user else None
-    create_and_send_otp(db, email=email, purpose=req.purpose, user_id=user_id, client_ip=client_ip)
-    return {"success": True, "message": "A new verification code has been sent."}
-
-
-@router.post("/login")
+@router.post("/login", response_model=AuthResponse)
 def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_login_rate_limit(client_ip)
@@ -295,14 +237,8 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
     if not user or not verify_password(req.password, user.password_hash):
         record_login_attempt(client_ip)
         record_failed_login(db, user)
-        # Always return the exact same generic error
+        # Generic error message to prevent account enumeration
         raise HTTPException(status_code=401, detail="Incorrect email, username or password.")
-
-    if not user.is_email_verified:
-        raise HTTPException(
-            status_code=403,
-            detail="Your email is not verified. Please complete email verification before logging in.",
-        )
 
     if not user.is_active:
         raise HTTPException(
@@ -311,32 +247,10 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
         )
 
     reset_failed_login(db, user)
-
-    # Two-step login: send OTP
-    create_and_send_otp(db, email=user.email, purpose="login", user_id=user.id, client_ip=client_ip)
-
-    return {
-        "requiresOtp": True,
-        "userId": user.id,
-        "emailMasked": mask_email(user.email),
-        "message": f"Verification code sent to {mask_email(user.email)}.",
-    }
-
-
-@router.post("/verify-login-otp", response_model=AuthResponse)
-def verify_login_otp(req: VerifyLoginOtpRequest, db: Session = Depends(get_db)):
-    user = db.query(db_models.User).filter(db_models.User.id == req.userId).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid login session. Please sign in again.")
-
-    verified, msg = verify_otp_attempt(db, email=user.email, purpose="login", input_code=req.code)
-    if not verified:
-        raise HTTPException(status_code=400, detail=msg)
-
     user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
 
-    log_activity(db, "login", user_id=user.id, detail=f"User {user.email} completed 2-step login")
+    log_activity(db, "login", user_id=user.id, detail=f"User {user.email} logged in")
 
     token = create_access_token({
         "sub": str(user.id),
@@ -350,20 +264,13 @@ def verify_login_otp(req: VerifyLoginOtpRequest, db: Session = Depends(get_db)):
 
 @router.post("/forgot-password")
 def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
-    client_ip = request.client.host if request.client else "127.0.0.1"
     email = req.email.strip().lower()
     user = db.query(db_models.User).filter(db_models.User.email == email).first()
 
-    if user and user.is_active:
-        try:
-            create_and_send_otp(db, email=email, purpose="password_reset", user_id=user.id, client_ip=client_ip)
-        except HTTPException:
-            pass  # Rate limits handled gracefully
-
-    # Always return generic success message
+    # Always return generic response to avoid enumeration
     return {
         "success": True,
-        "message": "If an account matches that email address, a password reset code has been sent.",
+        "message": "If an account matches that email address, you may reset your password.",
     }
 
 
@@ -372,15 +279,11 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     email = req.email.strip().lower()
     user = db.query(db_models.User).filter(db_models.User.email == email).first()
     if not user:
-        raise HTTPException(status_code=400, detail="Invalid password reset request.")
+        raise HTTPException(status_code=404, detail="Account with that email address not found.")
 
     is_strong, p_msg = validate_password_strength(req.newPassword)
     if not is_strong:
         raise HTTPException(status_code=400, detail=p_msg)
-
-    verified, msg = verify_otp_attempt(db, email=email, purpose="password_reset", input_code=req.code)
-    if not verified:
-        raise HTTPException(status_code=400, detail=msg)
 
     user.password_hash = hash_password(req.newPassword)
     user.token_version = (user.token_version or 1) + 1  # Invalidate all active sessions
@@ -443,17 +346,17 @@ def logout(current_user: db_models.User = Depends(get_current_user), db: Session
 
 @router.delete("/me")
 def delete_own_account(current_user: db_models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Protect last active super_admin
-    if current_user.role == "super_admin":
-        active_supers = (
+    # Protect last active admin
+    if current_user.role in ("admin", "super_admin"):
+        active_admins = (
             db.query(db_models.User)
-            .filter(db_models.User.role == "super_admin", db_models.User.is_active.is_(True))
+            .filter(db_models.User.role.in_(["admin", "super_admin"]), db_models.User.is_active.is_(True))
             .count()
         )
-        if active_supers <= 1:
+        if active_admins <= 1:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot delete account: You are the last active super administrator.",
+                detail="Cannot delete account: You are the last active administrator.",
             )
 
     user_id = current_user.id

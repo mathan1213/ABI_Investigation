@@ -256,18 +256,13 @@ export interface User {
   createdAt: string;
   lastLoginAt?: string | null;
   scanCount?: number;
+  fileCount?: number;
+  reportCount?: number;
 }
 
 export interface CheckUsernameResult {
   available: boolean;
   reason: 'taken' | 'invalid' | 'reserved' | null;
-  message: string;
-}
-
-export interface OtpChallengeResponse {
-  requiresOtp: boolean;
-  userId: number;
-  emailMasked: string;
   message: string;
 }
 
@@ -325,8 +320,39 @@ export interface ActivityLogItem {
   createdAt: string;
 }
 
+export interface UploadedFileItem {
+  id: number;
+  userId: number;
+  userName: string;
+  userEmail: string;
+  filename: string;
+  fileSize: number;
+  fileType?: string;
+  module: string;
+  uploadedAt: string;
+}
+
+export interface AdminReportItem {
+  id: number;
+  userId: number;
+  userName: string;
+  userEmail: string;
+  overallScore: number;
+  overallRisk: RiskLevel;
+  reportJson?: string;
+  createdAt: string;
+}
+
 export interface UserDetail {
   profile: User;
+  files?: {
+    id: number;
+    filename: string;
+    fileSize: number;
+    fileType?: string;
+    module: string;
+    uploadedAt: string;
+  }[];
   scans: {
     id: number;
     module: string;
@@ -341,6 +367,7 @@ export interface UserDetail {
     id: number;
     overallScore: number;
     overallRisk: RiskLevel;
+    reportJson?: string;
     createdAt: string;
   }[];
   activity: ActivityLogItem[];

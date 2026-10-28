@@ -31,6 +31,7 @@ import {
   ChevronRight,
   Database,
   Lock,
+  UploadCloud,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -62,6 +63,8 @@ import {
   updateUserRole,
   removeAdmin,
   getSuperAdminAuditLogs,
+  getAdminFiles,
+  getAdminReports,
 } from '../lib/api';
 import {
   AdminOverview,
@@ -72,6 +75,8 @@ import {
   EligibleUser,
   AdminPermission,
   RiskLevel,
+  UploadedFileItem,
+  AdminReportItem,
 } from '../lib/types';
 import { RiskBadge } from '../components/RiskBadge';
 
@@ -104,8 +109,18 @@ export const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
 
   // Navigation tab state
-  type AdminTab = 'overview' | 'users' | 'scans_reports' | 'activity' | 'export' | 'admin_mgmt' | 'audit_log';
+  type AdminTab = 'overview' | 'users' | 'uploaded_files' | 'user_reports' | 'scans_reports' | 'activity' | 'export' | 'admin_mgmt' | 'audit_log';
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
+
+  // Uploaded files data
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFileItem[]>([]);
+  const [filesSearch, setFilesSearch] = useState('');
+  const [filesTotal, setFilesTotal] = useState(0);
+
+  // User Reports data
+  const [adminReports, setAdminReports] = useState<AdminReportItem[]>([]);
+  const [reportsSearch, setReportsSearch] = useState('');
+  const [reportsTotal, setReportsTotal] = useState(0);
 
   // Overview data
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -228,6 +243,18 @@ export const AdminDashboard: React.FC = () => {
         setTotalPages(uRes.totalPages);
       }
 
+      if (activeTab === 'uploaded_files') {
+        const fRes = await getAdminFiles({ search: filesSearch, page: 1, perPage: 50 });
+        setUploadedFiles(fRes.items);
+        setFilesTotal(fRes.total);
+      }
+
+      if (activeTab === 'user_reports') {
+        const rRes = await getAdminReports({ search: reportsSearch, page: 1, perPage: 50 });
+        setAdminReports(rRes.items);
+        setReportsTotal(rRes.total);
+      }
+
       if (activeTab === 'activity' && hasPermission('view_activity')) {
         const actRes = await getAdminActivity({
           action: activityActionFilter,
@@ -268,7 +295,7 @@ export const AdminDashboard: React.FC = () => {
     if (!isAuthLoading && isAdmin) {
       loadTabContent();
     }
-  }, [activeTab, currentPage, roleFilter, statusFilter, activityActionFilter, auditPage, isAuthLoading, isAdmin]);
+  }, [activeTab, currentPage, roleFilter, statusFilter, activityActionFilter, auditPage, filesSearch, reportsSearch, isAuthLoading, isAdmin]);
 
   // Handle Search in Users Tab
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -470,6 +497,32 @@ export const AdminDashboard: React.FC = () => {
               <span>Users Directory</span>
             </button>
           )}
+
+          {/* Uploaded Files */}
+          <button
+            onClick={() => setActiveTab('uploaded_files')}
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all ${
+              activeTab === 'uploaded_files'
+                ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <UploadCloud size={16} />
+            <span>Uploaded Files</span>
+          </button>
+
+          {/* User Reports */}
+          <button
+            onClick={() => setActiveTab('user_reports')}
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all ${
+              activeTab === 'user_reports'
+                ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30 shadow-sm'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <FileText size={16} />
+            <span>User Reports</span>
+          </button>
 
           {/* Scans & Reports */}
           {(hasPermission('view_scans') || hasPermission('view_reports')) && (
@@ -773,6 +826,8 @@ export const AdminDashboard: React.FC = () => {
                           <th className="py-3 px-4">Username</th>
                           <th className="py-3 px-4">Role</th>
                           <th className="py-3 px-4">Status</th>
+                          <th className="py-3 px-4">Files</th>
+                          <th className="py-3 px-4">Reports</th>
                           <th className="py-3 px-4">Scans</th>
                           <th className="py-3 px-4">Joined</th>
                           <th className="py-3 px-4 text-right">Actions</th>
@@ -812,7 +867,13 @@ export const AdminDashboard: React.FC = () => {
                                 {u.isActive ? 'Active' : 'Disabled'}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-slate-300 font-semibold">
+                            <td className="py-3 px-4 text-cyan-400 font-semibold font-mono">
+                              {u.fileCount ?? 0}
+                            </td>
+                            <td className="py-3 px-4 text-purple-400 font-semibold font-mono">
+                              {u.reportCount ?? 0}
+                            </td>
+                            <td className="py-3 px-4 text-slate-300 font-semibold font-mono">
                               {u.scanCount ?? 0}
                             </td>
                             <td className="py-3 px-4 text-slate-400 text-[11px]">
@@ -855,7 +916,7 @@ export const AdminDashboard: React.FC = () => {
                         ))}
                         {users.length === 0 && (
                           <tr>
-                            <td colSpan={7} className="py-8 text-center text-slate-500">
+                            <td colSpan={9} className="py-8 text-center text-slate-500">
                               No users matching search filters found.
                             </td>
                           </tr>
@@ -895,7 +956,165 @@ export const AdminDashboard: React.FC = () => {
             )
           )}
 
-          {/* TAB: SCANS & REPORTS */}
+          {/* TAB: UPLOADED FILES */}
+          {activeTab === 'uploaded_files' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-[#111827] border border-slate-800 rounded-2xl p-4 shadow-xl">
+                <div className="flex-1 w-full sm:w-auto relative">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={filesSearch}
+                    onChange={(e) => setFilesSearch(e.target.value)}
+                    placeholder="Search uploaded files by name or user email..."
+                    className="w-full bg-[#0B0F19] border border-slate-700/80 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                  />
+                </div>
+                <div className="text-xs text-slate-400 font-mono">
+                  Total Files: <span className="font-bold text-white">{filesTotal}</span>
+                </div>
+              </div>
+
+              <div className="bg-[#111827] border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#0B0F19] text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4">Uploaded File</th>
+                        <th className="py-3 px-4">User</th>
+                        <th className="py-3 px-4">Size</th>
+                        <th className="py-3 px-4">Module</th>
+                        <th className="py-3 px-4">Uploaded At</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {uploadedFiles.map((file) => (
+                        <tr key={file.id} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2.5">
+                              <UploadCloud className="w-4 h-4 text-cyan-400 shrink-0" />
+                              <div>
+                                <p className="font-semibold text-white">{file.filename}</p>
+                                <p className="text-[11px] text-slate-500">{file.fileType || 'binary'}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <p className="font-semibold text-slate-200">{file.userName}</p>
+                            <p className="text-[11px] text-slate-400">{file.userEmail}</p>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-300">
+                            {(file.fileSize / 1024).toFixed(1)} KB
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                              {file.module}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-400 text-[11px]">
+                            {new Date(file.uploadedAt).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              onClick={() => handleViewUserDetail(file.userId)}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors text-[11px] font-medium inline-flex items-center gap-1"
+                            >
+                              <Eye size={12} />
+                              <span>View User</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {uploadedFiles.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-slate-500">
+                            No uploaded files found.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: SUBMITTED REPORTS */}
+          {activeTab === 'user_reports' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-[#111827] border border-slate-800 rounded-2xl p-4 shadow-xl">
+                <div className="flex-1 w-full sm:w-auto relative">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={reportsSearch}
+                    onChange={(e) => setReportsSearch(e.target.value)}
+                    placeholder="Search reports by user name or risk..."
+                    className="w-full bg-[#0B0F19] border border-slate-700/80 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                  />
+                </div>
+                <div className="text-xs text-slate-400 font-mono">
+                  Total Reports: <span className="font-bold text-white">{reportsTotal}</span>
+                </div>
+              </div>
+
+              <div className="bg-[#111827] border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#0B0F19] text-slate-400 uppercase tracking-wider font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4">Report ID</th>
+                        <th className="py-3 px-4">Submitted By</th>
+                        <th className="py-3 px-4">Overall Score</th>
+                        <th className="py-3 px-4">Risk Level</th>
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {adminReports.map((report) => (
+                        <tr key={report.id} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="py-3 px-4 font-mono font-semibold text-white">
+                            #{report.id}
+                          </td>
+                          <td className="py-3 px-4">
+                            <p className="font-semibold text-slate-200">{report.userName}</p>
+                            <p className="text-[11px] text-slate-400">{report.userEmail}</p>
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-cyan-400">
+                            {report.overallScore}/100
+                          </td>
+                          <td className="py-3 px-4">
+                            <RiskBadge level={report.overallRisk} />
+                          </td>
+                          <td className="py-3 px-4 text-slate-400 text-[11px]">
+                            {new Date(report.createdAt).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              onClick={() => handleViewUserDetail(report.userId)}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors text-[11px] font-medium inline-flex items-center gap-1"
+                            >
+                              <Eye size={12} />
+                              <span>View User</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {adminReports.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-slate-500">
+                            No submitted reports found.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
           {activeTab === 'scans_reports' && (
             isTabAllowed('scans_reports') ? (
               <div className="space-y-6">
@@ -996,7 +1215,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   Download a complete CSV archive of registered user accounts, active roles, verification statuses,
-                  and executed investigation counts. All sensitive fields (e.g. passwords, OTP codes, authentication tokens)
+                  and executed investigation counts. All sensitive fields (e.g. passwords, hashes, authentication tokens)
                   are excluded from the export.
                 </p>
 
@@ -1247,7 +1466,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             {/* Quick stats */}
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
               <div className="bg-[#0B0F19] p-3 rounded-xl border border-slate-800">
                 <span className="text-[10px] text-slate-400 uppercase tracking-wider">Role</span>
                 <p className="font-bold text-sm text-white uppercase">{selectedUserDetail.profile.role}</p>
@@ -1259,15 +1478,73 @@ export const AdminDashboard: React.FC = () => {
                 </p>
               </div>
               <div className="bg-[#0B0F19] p-3 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider">Files Uploaded</span>
+                <p className="font-bold text-sm text-cyan-400">{(selectedUserDetail.files || []).length}</p>
+              </div>
+              <div className="bg-[#0B0F19] p-3 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 uppercase tracking-wider">Reports</span>
+                <p className="font-bold text-sm text-amber-400">{(selectedUserDetail.reports || []).length}</p>
+              </div>
+              <div className="bg-[#0B0F19] p-3 rounded-xl border border-slate-800 col-span-2 sm:col-span-1">
                 <span className="text-[10px] text-slate-400 uppercase tracking-wider">Scans Conducted</span>
                 <p className="font-bold text-sm text-purple-400">{selectedUserDetail.scans.length}</p>
               </div>
             </div>
 
+            {/* Uploaded Files */}
+            <div>
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <UploadCloud className="w-3.5 h-3.5 text-cyan-400" />
+                Files Uploaded ({ (selectedUserDetail.files || []).length })
+              </h4>
+              <div className="bg-[#0B0F19] border border-slate-800 rounded-xl divide-y divide-slate-800/80 max-h-40 overflow-y-auto text-xs">
+                {(selectedUserDetail.files || []).map((f) => (
+                  <div key={f.id} className="p-3 flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-slate-200">{f.filename}</p>
+                      <p className="text-[11px] text-slate-500 capitalize">{f.module} &bull; {(f.fileSize / 1024).toFixed(1)} KB</p>
+                    </div>
+                    <span className="text-[10px] text-slate-400">{new Date(f.uploadedAt).toLocaleString()}</span>
+                  </div>
+                ))}
+                {(!selectedUserDetail.files || selectedUserDetail.files.length === 0) && (
+                  <div className="p-3 text-center text-slate-500">No files uploaded by this user.</div>
+                )}
+              </div>
+            </div>
+
+            {/* Submitted Reports */}
+            <div>
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-amber-400" />
+                Submitted Reports ({ (selectedUserDetail.reports || []).length })
+              </h4>
+              <div className="bg-[#0B0F19] border border-slate-800 rounded-xl divide-y divide-slate-800/80 max-h-40 overflow-y-auto text-xs">
+                {(selectedUserDetail.reports || []).map((r) => (
+                  <div key={r.id} className="p-3 flex items-center justify-between">
+                    <div>
+                      <span className="font-medium text-slate-200">Investigation Report #{r.id}</span>
+                      <p className="text-[11px] text-slate-500">Risk Level: <span className="font-semibold uppercase text-slate-300">{r.overallRisk}</span></p>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-mono text-xs font-bold text-amber-400">{r.overallScore}/100</span>
+                      <p className="text-[10px] text-slate-500">{new Date(r.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                ))}
+                {(!selectedUserDetail.reports || selectedUserDetail.reports.length === 0) && (
+                  <div className="p-3 text-center text-slate-500">No reports submitted by this user.</div>
+                )}
+              </div>
+            </div>
+
             {/* Recent Scans */}
             <div>
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2">Investigation History</h4>
-              <div className="bg-[#0B0F19] border border-slate-800 rounded-xl divide-y divide-slate-800/80 max-h-48 overflow-y-auto text-xs">
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-purple-400" />
+                Investigation History ({ selectedUserDetail.scans.length })
+              </h4>
+              <div className="bg-[#0B0F19] border border-slate-800 rounded-xl divide-y divide-slate-800/80 max-h-44 overflow-y-auto text-xs">
                 {selectedUserDetail.scans.map((s) => (
                   <div key={s.id} className="p-3 flex items-center justify-between">
                     <div>
@@ -1281,7 +1558,7 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 ))}
                 {selectedUserDetail.scans.length === 0 && (
-                  <div className="p-4 text-center text-slate-500">No scans executed yet.</div>
+                  <div className="p-3 text-center text-slate-500">No scans executed yet.</div>
                 )}
               </div>
             </div>

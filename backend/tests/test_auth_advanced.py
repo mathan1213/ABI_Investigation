@@ -1,8 +1,8 @@
 import json
-import datetime
 import pytest
 from httpx import AsyncClient, ASGITransport
 import bcrypt
+from unittest.mock import patch
 
 from main import app
 from database import SessionLocal
@@ -10,7 +10,6 @@ import db_models
 from modules.auth_module import (
     get_current_user,
     create_access_token,
-    hash_otp_code,
     hash_password,
     ALL_PERMISSIONS,
 )
@@ -20,7 +19,7 @@ from modules.auth_module import (
 def clean_db():
     db = SessionLocal()
     try:
-        db.query(db_models.EmailOtp).delete()
+        db.query(db_models.UploadedFile).delete()
         db.query(db_models.AuditLog).delete()
         db.query(db_models.ActivityLog).delete()
         db.query(db_models.Report).delete()
@@ -98,121 +97,86 @@ async def test_username_uniqueness_case_insensitive_and_409(clean_db):
 
 
 @pytest.mark.asyncio
-async def test_email_otp_generation_hash_storage_and_activation(clean_db):
+async def test_welcome_email_and_instant_login(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # 1. Register account
-        r = await ac.post("/api/auth/register", json={
-            "name": "Emma Watson",
-            "username": "emma_w",
-            "email": "emma@test.com",
-            "password": "StrongPassword123!",
-            "consent": True
-        })
-        assert r.status_code == 200
-        user_id = r.json()["userId"]
-
-        # 2. Verify OTP row in database: code_hash is NOT plain text
-        db = SessionLocal()
-        otp_row = db.query(db_models.EmailOtp).filter(db_models.EmailOtp.user_id == user_id).first()
-        assert otp_row is not None
-        assert len(otp_row.code_hash) == 64  # SHA256 hex digest
-        assert not otp_row.code_hash.isdigit()  # NEVER store 6 digit plain text!
-
-        # 3. Unverified account cannot log in
-        login_unverified = await ac.post("/api/auth/login", json={
-            "identifier": "emma_w",
-            "password": "StrongPassword123!"
-        })
-        assert login_unverified.status_code == 403
-        assert "not verified" in login_unverified.json()["detail"].lower()
-
-        # 4. Incorrect code attempt
-        r_bad = await ac.post("/api/auth/verify-email", json={
-            "email": "emma@test.com",
-            "code": "000000"
-        })
-        assert r_bad.status_code == 400
-        assert "incorrect" in r_bad.json()["detail"].lower()
-
-        # 5. Overwrite hash with known code to test successful activation
-        known_code = "123456"
-        otp_row.code_hash = hash_otp_code(known_code)
-        db.commit()
-        db.close()
-
-        r_verify = await ac.post("/api/auth/verify-email", json={
-            "email": "emma@test.com",
-            "code": known_code
-        })
-        assert r_verify.status_code == 200
-        data = r_verify.json()
-        assert "token" in data
-        assert data["user"]["is_email_verified"] is True
-        assert data["user"]["is_active"] is True
-
-        # 6. Used code cannot be reused
-        r_reuse = await ac.post("/api/auth/verify-email", json={
-            "email": "emma@test.com",
-            "code": known_code
-        })
-        assert r_reuse.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_otp_lockout_after_5_wrong_attempts(clean_db):
-    app.dependency_overrides.pop(get_current_user, None)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        await ac.post("/api/auth/register", json={
-            "name": "Lockout User",
-            "username": "lockout_user",
-            "email": "lockout@test.com",
-            "password": "Password123!",
-            "consent": True
-        })
-
-        # Submit 5 incorrect codes
-        for _ in range(5):
-            await ac.post("/api/auth/verify-email", json={
-                "email": "lockout@test.com",
-                "code": "999999"
+    with patch("routers.auth.send_welcome_email") as mock_email:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            # 1. Register account
+            r = await ac.post("/api/auth/register", json={
+                "name": "Emma Watson",
+                "username": "emma_w",
+                "email": "emma@test.com",
+                "password": "StrongPassword123!",
+                "consent": True
             })
+            assert r.status_code == 200
+            mock_email.assert_called_once_with(to_email="emma@test.com", user_name="Emma Watson")
 
-        # Check DB that OTP row is marked used/invalidated
-        db = SessionLocal()
-        otp = db.query(db_models.EmailOtp).filter(db_models.EmailOtp.email == "lockout@test.com").first()
-        assert otp.attempts >= 5
-        assert otp.used is True
-        db.close()
+            # 2. Account is directly active and email verified in DB
+            db = SessionLocal()
+            user_in_db = db.query(db_models.User).filter(db_models.User.email == "emma@test.com").first()
+            assert user_in_db is not None
+            assert user_in_db.is_active is True
+            assert user_in_db.is_email_verified is True
+            assert user_in_db.role == "user"
+            db.close()
+
+            # 3. Direct login with email + password immediately succeeds without any OTP!
+            login_res = await ac.post("/api/auth/login", json={
+                "identifier": "emma@test.com",
+                "password": "StrongPassword123!"
+            })
+            assert login_res.status_code == 200
+            login_data = login_res.json()
+            assert "token" in login_data
+            assert login_data["user"]["email"] == "emma@test.com"
+            assert login_data["user"]["name"] == "Emma Watson"
+
+            # 4. Direct login with username + password also succeeds
+            login_user_res = await ac.post("/api/auth/login", json={
+                "identifier": "emma_w",
+                "password": "StrongPassword123!"
+            })
+            assert login_user_res.status_code == 200
+            assert "token" in login_user_res.json()
 
 
 @pytest.mark.asyncio
-async def test_admin_login_rejects_normal_user(clean_db):
+async def test_login_account_lockout_after_failed_attempts(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
     db = SessionLocal()
-    # Create verified normal user
     user = db_models.User(
-        name="Regular Joe",
-        username="regular_joe",
-        username_lower="regular_joe",
-        email="joe@test.com",
+        name="Lockout Target",
+        username="lockout_user",
+        username_lower="lockout_user",
+        email="lockout@test.com",
         password_hash=hash_password("Password123!"),
         role="user",
         is_active=True,
         is_email_verified=True,
+        token_version=1,
     )
     db.add(user)
     db.commit()
     db.close()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Regular user attempting admin login gets generic 401
-        res = await ac.post("/api/admin/login", json={
-            "identifier": "regular_joe",
+        # Submit 10 wrong password attempts
+        for _ in range(10):
+            res_fail = await ac.post("/api/auth/login", json={
+                "identifier": "lockout_user",
+                "password": "WrongPassword!"
+            })
+            assert res_fail.status_code in (401, 429)
+
+        # 11th attempt should trigger account lockout (429 or 401 indicating locked)
+        res_locked = await ac.post("/api/auth/login", json={
+            "identifier": "lockout_user",
             "password": "Password123!"
         })
-        assert res.status_code == 401
-        assert res.json()["detail"] == "Incorrect email, username or password."
+        assert res_locked.status_code in (401, 429)
+        detail = res_locked.json()["detail"].lower()
+        assert "locked" in detail or "too many" in detail
 
 
 @pytest.mark.asyncio
@@ -387,20 +351,6 @@ async def test_token_version_invalidation_on_password_reset(clean_db):
 
     # Issue token with token_version 1
     token_v1 = create_access_token({"sub": str(user.id), "email": user.email, "role": "user", "token_version": 1})
-
-    # Prepare password reset OTP
-    reset_code = "789123"
-    otp = db_models.EmailOtp(
-        user_id=user.id,
-        email="version@test.com",
-        purpose="password_reset",
-        code_hash=hash_otp_code(reset_code),
-        expires_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10),
-        attempts=0,
-        used=False,
-    )
-    db.add(otp)
-    db.commit()
     db.close()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -411,7 +361,6 @@ async def test_token_version_invalidation_on_password_reset(clean_db):
         # Reset password -> bumps token_version
         res_reset = await ac.post("/api/auth/reset-password", json={
             "email": "version@test.com",
-            "code": reset_code,
             "newPassword": "NewPassword123!"
         })
         assert res_reset.status_code == 200

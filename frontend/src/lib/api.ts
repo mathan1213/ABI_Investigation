@@ -9,12 +9,13 @@ import {
   User,
   AuthResponse,
   CheckUsernameResult,
-  OtpChallengeResponse,
   AuditLogItem,
   EligibleUser,
   AdminOverview,
   UserDetail,
   ActivityLogItem,
+  UploadedFileItem,
+  AdminReportItem,
 } from './types';
 
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -118,62 +119,24 @@ export async function registerUser(
   return await handleResponse(res, "Failed to register account.");
 }
 
-export async function verifyEmail(email: string, code: string): Promise<AuthResponse> {
-  const res = await fetch(`${API_BASE}/api/auth/verify-email`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, code }),
-  });
-  const data = await handleResponse<AuthResponse>(res, "Failed to verify email address.");
-  setAuthToken(data.token);
-  return data;
-}
-
-export async function resendOtp(email: string, purpose: string = "register"): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, purpose }),
-  });
-  return await handleResponse(res, "Failed to resend verification code.");
-}
-
-export async function loginUser(identifier: string, password: string): Promise<OtpChallengeResponse> {
+export async function loginUser(identifier: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ identifier, password }),
   });
-  return await handleResponse<OtpChallengeResponse>(res, "Failed to sign in.");
-}
-
-export async function verifyLoginOtp(userId: number, code: string): Promise<AuthResponse> {
-  const res = await fetch(`${API_BASE}/api/auth/verify-login-otp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, code }),
-  });
-  const data = await handleResponse<AuthResponse>(res, "Failed to verify sign in code.");
+  const data = await handleResponse<AuthResponse>(res, "Failed to sign in.");
   setAuthToken(data.token);
   return data;
 }
 
-export async function adminLogin(identifier: string, password: string): Promise<OtpChallengeResponse> {
+export async function adminLogin(identifier: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/api/admin/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ identifier, password }),
   });
-  return await handleResponse<OtpChallengeResponse>(res, "Administrative sign in failed.");
-}
-
-export async function adminVerifyLoginOtp(userId: number, code: string): Promise<AuthResponse> {
-  const res = await fetch(`${API_BASE}/api/admin/verify-login-otp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, code }),
-  });
-  const data = await handleResponse<AuthResponse>(res, "Failed to verify administrator code.");
+  const data = await handleResponse<AuthResponse>(res, "Administrative sign in failed.");
   setAuthToken(data.token);
   return data;
 }
@@ -187,11 +150,11 @@ export async function forgotPassword(email: string): Promise<{ success: boolean;
   return await handleResponse(res, "Failed to process forgot password request.");
 }
 
-export async function resetPassword(email: string, code: string, newPassword: string): Promise<{ success: boolean; message: string }> {
+export async function resetPassword(email: string, newPassword: string): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, code, newPassword }),
+    body: JSON.stringify({ email, newPassword }),
   });
   return await handleResponse(res, "Failed to reset password.");
 }
@@ -588,4 +551,41 @@ export async function getSuperAdminAuditLogs(params?: {
   });
   return await handleResponse(res, "Failed to load audit logs.");
 }
+
+export async function getAdminFiles(params?: {
+  search?: string;
+  userId?: number;
+  page?: number;
+  perPage?: number;
+}): Promise<{ items: UploadedFileItem[]; total: number; page: number; perPage: number; totalPages?: number }> {
+  const query = new URLSearchParams();
+  if (params?.search) query.append("search", params.search);
+  if (params?.userId) query.append("user_id", String(params.userId));
+  if (params?.page) query.append("page", String(params.page));
+  if (params?.perPage) query.append("per_page", String(params.perPage));
+
+  const res = await fetch(`${API_BASE}/api/admin/files?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load uploaded files.");
+}
+
+export async function getAdminReports(params?: {
+  search?: string;
+  userId?: number;
+  page?: number;
+  perPage?: number;
+}): Promise<{ items: AdminReportItem[]; total: number; page: number; perPage: number; totalPages?: number }> {
+  const query = new URLSearchParams();
+  if (params?.search) query.append("search", params.search);
+  if (params?.userId) query.append("user_id", String(params.userId));
+  if (params?.page) query.append("page", String(params.page));
+  if (params?.perPage) query.append("per_page", String(params.perPage));
+
+  const res = await fetch(`${API_BASE}/api/admin/reports?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load reports.");
+}
+
 

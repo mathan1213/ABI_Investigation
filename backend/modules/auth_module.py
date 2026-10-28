@@ -23,7 +23,6 @@ security_bearer = HTTPBearer(auto_error=False)
 
 # In-memory IP tracking: client_ip -> list of timestamps
 _login_attempts: dict[str, list[float]] = defaultdict(list)
-_otp_requests: dict[str, list[float]] = defaultdict(list)
 _username_checks: dict[str, list[float]] = defaultdict(list)
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
@@ -129,19 +128,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def hash_otp_code(code: str) -> str:
-    return hmac.new(settings.JWT_SECRET.encode("utf-8"), code.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def verify_otp_code(input_code: str, stored_hash: str) -> bool:
-    expected_hash = hash_otp_code(input_code)
-    return hmac.compare_digest(stored_hash, expected_hash)
-
-
-def generate_otp_code() -> str:
-    return f"{secrets.randbelow(900000) + 100000}"
-
-
 # ---------------------------------------------------------------------------
 # JWT Access Tokens
 # ---------------------------------------------------------------------------
@@ -210,154 +196,6 @@ def record_username_check(client_ip: str) -> None:
     _username_checks[client_ip].append(time.time())
 
 
-def check_otp_rate_limit(client_ip: str) -> None:
-    now = time.time()
-    valid_requests = [t for t in _otp_requests[client_ip] if now - t < 60]
-    _otp_requests[client_ip] = valid_requests
-    if len(valid_requests) >= 15:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many verification code requests from this device. Please wait.",
-        )
-
-
-def record_otp_request(client_ip: str) -> None:
-    _otp_requests[client_ip].append(time.time())
-
-
-# ---------------------------------------------------------------------------
-# OTP Creation & Verification
-# ---------------------------------------------------------------------------
-
-def create_and_send_otp(
-    db: Session,
-    email: str,
-    purpose: str,
-    user_id: Optional[int] = None,
-    client_ip: str = "127.0.0.1",
-) -> None:
-    from modules.email_service import send_otp_email
-
-    check_otp_rate_limit(client_ip)
-    record_otp_request(client_ip)
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    email_clean = email.strip().lower()
-
-    # Check 60-second cooldown per account
-    recent_otp = (
-        db.query(db_models.EmailOtp)
-        .filter(
-            db_models.EmailOtp.email == email_clean,
-            db_models.EmailOtp.purpose == purpose,
-            db_models.EmailOtp.created_at >= now - datetime.timedelta(seconds=settings.OTP_RESEND_COOLDOWN_SECONDS),
-        )
-        .first()
-    )
-    if recent_otp:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Please wait 60 seconds before requesting another verification code.",
-        )
-
-    # Check 5 per hour per account
-    hourly_count = (
-        db.query(func.count(db_models.EmailOtp.id))
-        .filter(
-            db_models.EmailOtp.email == email_clean,
-            db_models.EmailOtp.purpose == purpose,
-            db_models.EmailOtp.created_at >= now - datetime.timedelta(hours=1),
-        )
-        .scalar()
-        or 0
-    )
-    if hourly_count >= settings.OTP_HOURLY_LIMIT:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many verification requests for this account. Please try again in an hour.",
-        )
-
-    # Invalidate older unused codes for the same email and purpose
-    db.query(db_models.EmailOtp).filter(
-        db_models.EmailOtp.email == email_clean,
-        db_models.EmailOtp.purpose == purpose,
-        db_models.EmailOtp.used.is_(False),
-    ).update({"used": True})
-
-    code = generate_otp_code()
-    code_hash = hash_otp_code(code)
-    expires_at = now + datetime.timedelta(minutes=settings.OTP_EXPIRATION_MINUTES)
-
-    otp_row = db_models.EmailOtp(
-        user_id=user_id,
-        email=email_clean,
-        purpose=purpose,
-        code_hash=code_hash,
-        expires_at=expires_at,
-        attempts=0,
-        used=False,
-        created_at=now,
-    )
-    db.add(otp_row)
-    db.commit()
-
-    # Send the email (prints to console in dev if SMTP unconfigured)
-    send_otp_email(to_email=email_clean, code=code, purpose=purpose)
-
-
-def verify_otp_attempt(
-    db: Session,
-    email: str,
-    purpose: str,
-    input_code: str,
-) -> tuple[bool, str]:
-    now = datetime.datetime.now(datetime.timezone.utc)
-    email_clean = email.strip().lower()
-
-    otp = (
-        db.query(db_models.EmailOtp)
-        .filter(
-            db_models.EmailOtp.email == email_clean,
-            db_models.EmailOtp.purpose == purpose,
-            db_models.EmailOtp.used.is_(False),
-        )
-        .order_by(db_models.EmailOtp.created_at.desc())
-        .first()
-    )
-
-    if not otp:
-        return False, "No active verification code found. Please request a new code."
-
-    # Check expiration (offset-naive vs offset-aware normalization)
-    exp = otp.expires_at
-    if exp.tzinfo is None:
-        exp = exp.replace(tzinfo=datetime.timezone.utc)
-
-    if exp < now:
-        otp.used = True
-        db.commit()
-        return False, "Verification code has expired. Please request a new code."
-
-    # Check maximum wrong attempts
-    if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
-        otp.used = True
-        db.commit()
-        return False, "Too many incorrect attempts. This code has been invalidated. Please request a new code."
-
-    if not verify_otp_code(input_code.strip(), otp.code_hash):
-        otp.attempts += 1
-        if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
-            otp.used = True
-        db.commit()
-        attempts_left = max(0, settings.OTP_MAX_ATTEMPTS - otp.attempts)
-        return False, f"Incorrect verification code. ({attempts_left} attempts remaining)."
-
-    # Code matches
-    otp.used = True
-    db.commit()
-    return True, "Verification code accepted."
-
-
 # ---------------------------------------------------------------------------
 # Account Lockout & Cleanup Helpers
 # ---------------------------------------------------------------------------
@@ -390,26 +228,6 @@ def reset_failed_login(db: Session, user: db_models.User) -> None:
     user.failed_login_attempts = 0
     user.locked_until = None
     db.commit()
-
-
-def cleanup_unverified_accounts(db: Session) -> int:
-    """Deletes accounts unverified for > 24 hours to free up usernames and emails."""
-    now = datetime.datetime.now(datetime.timezone.utc)
-    threshold = now - datetime.timedelta(hours=24)
-    old_unverified = (
-        db.query(db_models.User)
-        .filter(
-            db_models.User.is_email_verified.is_(False),
-            db_models.User.created_at < threshold,
-        )
-        .all()
-    )
-    count = len(old_unverified)
-    for u in old_unverified:
-        db.delete(u)
-    if count > 0:
-        db.commit()
-    return count
 
 
 # ---------------------------------------------------------------------------
@@ -561,19 +379,19 @@ def log_audit(
 
 
 # ---------------------------------------------------------------------------
-# Initial Super Admin Seeder
+# Initial Admin Seeder
 # ---------------------------------------------------------------------------
 
 def seed_admin_if_needed(db: Session):
-    existing_super = db.query(db_models.User).filter(db_models.User.role == "super_admin").first()
-    if not existing_super and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
+    existing_admin = db.query(db_models.User).filter(db_models.User.role.in_(["admin", "super_admin"])).first()
+    if not existing_admin and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
         admin_user = db_models.User(
             name="System Administrator",
             username="admin",
             username_lower="admin",
             email=settings.ADMIN_EMAIL.strip().lower(),
             password_hash=hash_password(settings.ADMIN_PASSWORD),
-            role="super_admin",
+            role="admin",
             is_active=True,
             is_email_verified=True,
             token_version=1,
@@ -582,4 +400,4 @@ def seed_admin_if_needed(db: Session):
         )
         db.add(admin_user)
         db.commit()
-        log_activity(db, "register", user_id=admin_user.id, detail="Seeded initial system super administrator")
+        log_activity(db, "register", user_id=admin_user.id, detail="Seeded initial system administrator")

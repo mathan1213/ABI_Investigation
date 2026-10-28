@@ -75,8 +75,8 @@ def init_db():
             u.username_lower = candidate.lower()
             u.is_email_verified = True
             u.needs_username_change = True
-            if u.role == "admin" or (settings.ADMIN_EMAIL and u.email.lower() == settings.ADMIN_EMAIL.lower()):
-                u.role = "super_admin"
+            if u.role in ("admin", "super_admin") or (settings.ADMIN_EMAIL and u.email.lower() == settings.ADMIN_EMAIL.lower()):
+                u.role = "admin"
                 u.needs_username_change = False
                 u.permissions = "[]"
         db.commit()

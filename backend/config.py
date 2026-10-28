@@ -29,26 +29,24 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
-    # Initial Super Admin Seed Credentials
+    # Initial Admin Seed Credentials
     ADMIN_EMAIL: Optional[str] = "admin@breach-investigation.local"
     ADMIN_PASSWORD: Optional[str] = "AdminSecurePassword2026!"
 
-    # Email / SMTP / Resend Configuration
-    SMTP_HOST: Optional[str] = None
+    # Email / SMTP Configuration (Gmail STARTTLS by default)
+    SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
+    SMTP_EMAIL: Optional[str] = None
+    SMTP_APP_PASSWORD: Optional[str] = None
     SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
-    SMTP_FROM: str = "noreply@breach-investigation.local"
-    RESEND_API_KEY: Optional[str] = None
-    RESEND_FROM: Optional[str] = "onboarding@resend.dev"
+    SMTP_FROM: Optional[str] = None
 
     # Security & Policy Settings
-    OTP_EXPIRATION_MINUTES: int = 10
-    OTP_MAX_ATTEMPTS: int = 5
-    OTP_RESEND_COOLDOWN_SECONDS: int = 60
-    OTP_HOURLY_LIMIT: int = 5
+    AUTH_LOGIN_RATE_LIMIT: int = 10
     MAX_FAILED_LOGINS: int = 10
     LOCKOUT_MINUTES: int = 15
+    RATE_LIMIT_PER_MINUTE: int = 30
 
     # Optional third-party threat intelligence keys
     ABUSEIPDB_KEY: Optional[str] = None

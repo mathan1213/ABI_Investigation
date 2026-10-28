@@ -1,33 +1,33 @@
 import smtplib
-import httpx
+import threading
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
-from fastapi import HTTPException, status
 from config import settings
 
-PURPOSE_PHRASES = {
-    "register": "complete your registration",
-    "login": "sign in to your account",
-    "admin_login": "sign in to the administrative portal",
-    "password_reset": "reset your password",
-}
 
-def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
+def _send_welcome_email_sync(to_email: str, user_name: str) -> bool:
     """
-    Sends a 6-digit OTP email using Resend API or SMTP with STARTTLS.
-    If Resend and SMTP are unconfigured and APP_ENV is development, prints the code to stdout only.
-    Otherwise raises 503 Service Unavailable.
-    Never exposes the code in any API response.
+    Synchronous helper that attempts to deliver a Welcome email via Gmail SMTP (STARTTLS).
+    Wrapped in try/except so email delivery errors never propagate to the caller.
     """
-    action_phrase = PURPOSE_PHRASES.get(purpose, "verify your account")
-    subject = f"[{settings.APP_NAME}] Your verification code"
+    smtp_email = settings.SMTP_EMAIL or settings.SMTP_USER
+    smtp_password = settings.SMTP_APP_PASSWORD or settings.SMTP_PASSWORD
+    smtp_host = settings.SMTP_HOST or "smtp.gmail.com"
+    smtp_port = settings.SMTP_PORT or 587
+    sender = settings.SMTP_FROM or smtp_email or "noreply@breach-investigation.local"
+
+    subject = f"Welcome to {settings.APP_NAME} - Your Account is Ready"
+    name_display = user_name.strip() if user_name else "User"
 
     text_body = (
-        f"{settings.APP_NAME}\n\n"
-        f"Your verification code is: {code}\n\n"
-        f"This code expires in 10 minutes.\n"
-        f"If you did not request this, ignore this email.\n"
+        f"Hello {name_display},\n\n"
+        f"Welcome to {settings.APP_NAME}! Your account has been successfully created.\n\n"
+        f"You can now sign in at any time with your email and password to run security audits "
+        f"and track incident investigations.\n\n"
+        f"If you did not create this account, please contact system administration immediately.\n\n"
+        f"Best regards,\n"
+        f"{settings.APP_NAME} Team\n"
     )
 
     html_body = f"""<!DOCTYPE html>
@@ -37,25 +37,33 @@ def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
   <table width="100%" border="0" cellspacing="0" cellpadding="0">
     <tr>
       <td align="center">
-        <table width="100%" style="max-width: 480px; background-color: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 28px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <table width="100%" style="max-width: 500px; background-color: #111827; border: 1px solid #1e293b; border-radius: 16px; padding: 28px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
           <tr>
             <td align="center" style="padding-bottom: 16px;">
-              <h2 style="margin: 0; color: #38bdf8; font-size: 20px; font-weight: 700;">{settings.APP_NAME}</h2>
+              <h2 style="margin: 0; color: #38bdf8; font-size: 22px; font-weight: 700;">{settings.APP_NAME}</h2>
               <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 13px;">Security &amp; Incident Forensics</p>
             </td>
           </tr>
           <tr>
-            <td style="padding: 16px 0; border-top: 1px solid #1e293b; border-bottom: 1px solid #1e293b;">
-              <p style="color: #cbd5e1; font-size: 14px; margin: 0 0 16px 0;">Use the 6-digit verification code below to {action_phrase}:</p>
-              <div style="background-color: #0b0f19; border: 1px solid #0284c7; border-radius: 12px; padding: 18px; text-align: center; margin: 16px 0;">
-                <span style="font-family: 'Courier New', Courier, monospace; font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #38bdf8;">{code}</span>
+            <td style="padding: 20px 0; border-top: 1px solid #1e293b; border-bottom: 1px solid #1e293b;">
+              <h3 style="color: #38bdf8; margin: 0 0 12px 0; font-size: 18px;">Welcome, {name_display}!</h3>
+              <p style="color: #cbd5e1; font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;">
+                Your account has been created successfully. You can now log in using your registered email address and password.
+              </p>
+              <div style="background-color: #0b0f19; border: 1px solid #0284c7; border-radius: 12px; padding: 14px 18px; margin: 16px 0;">
+                <p style="margin: 0; color: #94a3b8; font-size: 12px;">Registered Email:</p>
+                <p style="margin: 4px 0 0 0; color: #f0f9ff; font-family: monospace; font-size: 14px; font-weight: 600;">{to_email}</p>
               </div>
-              <p style="color: #94a3b8; font-size: 12px; margin: 12px 0 0 0; text-align: center;">This code <strong>expires in 10 minutes</strong>.</p>
+              <p style="color: #94a3b8; font-size: 13px; margin: 16px 0 0 0; line-height: 1.5;">
+                Start inspecting your Telegram export logs, public repositories, and IP/DNS records for credentials and breach exposures.
+              </p>
             </td>
           </tr>
           <tr>
             <td style="padding-top: 18px; text-align: center;">
-              <p style="color: #64748b; font-size: 12px; margin: 0; line-height: 1.4;">If you did not request this, ignore this email. Your account remains secure.</p>
+              <p style="color: #64748b; font-size: 12px; margin: 0; line-height: 1.4;">
+                If you did not create this account, please contact your security team.
+              </p>
             </td>
           </tr>
         </table>
@@ -65,72 +73,45 @@ def send_otp_email(to_email: str, code: str, purpose: str = "login") -> bool:
 </body>
 </html>"""
 
-    # 1. Try Resend API (https://resend.com) if configured
-    if settings.RESEND_API_KEY and settings.RESEND_API_KEY.strip():
-        try:
-            sender = settings.RESEND_FROM or settings.SMTP_FROM or "onboarding@resend.dev"
-            if "@breach-investigation.local" in sender or "@example.com" in sender:
-                sender = "onboarding@resend.dev"
-
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(
-                    "https://api.resend.com/emails",
-                    headers={
-                        "Authorization": f"Bearer {settings.RESEND_API_KEY.strip()}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "from": sender,
-                        "to": [to_email],
-                        "subject": subject,
-                        "html": html_body,
-                        "text": text_body,
-                    },
-                )
-                if res.status_code in (200, 201):
-                    return True
-                else:
-                    print(f"[RESEND ERROR] Status {res.status_code}: {res.text}")
-        except Exception as e:
-            print(f"[RESEND EXCEPTION] {e}")
-
-    # 2. Try SMTP with STARTTLS if configured
-    if settings.SMTP_HOST and settings.SMTP_HOST.strip():
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = settings.SMTP_FROM
-            msg["To"] = to_email
-
-            part1 = MIMEText(text_body, "plain", "utf-8")
-            part2 = MIMEText(html_body, "html", "utf-8")
-            msg.attach(part1)
-            msg.attach(part2)
-
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                server.starttls()
-                if settings.SMTP_USER and settings.SMTP_PASSWORD:
-                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                server.sendmail(settings.SMTP_FROM, [to_email], msg.as_string())
-            return True
-        except Exception as e:
-            # When SMTP fails, check if dev fallback applies
-            is_dev = settings.APP_ENV.lower() in ("development", "dev") or settings.ENVIRONMENT.lower() in ("development", "dev")
-            if is_dev:
-                print(f"[DEV ONLY] OTP for {to_email} ({purpose}): {code}")
-                return True
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Email delivery service is currently unavailable. Please contact the administrator."
-            )
-
-    # 3. Development Fallback: print to console
-    is_dev = settings.APP_ENV.lower() in ("development", "dev") or settings.ENVIRONMENT.lower() in ("development", "dev")
-    if is_dev:
-        print(f"[DEV ONLY] OTP for {to_email} ({purpose}): {code}")
+    # If SMTP credentials are not configured, simulate delivery safely
+    if not smtp_email or not smtp_password:
+        print(f"[WELCOME EMAIL] SMTP credentials not set; welcome email simulated for {to_email}")
         return True
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email delivery service is currently unavailable. Please contact the administrator."
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = sender
+        msg["To"] = to_email
+
+        part1 = MIMEText(text_body, "plain", "utf-8")
+        part2 = MIMEText(html_body, "html", "utf-8")
+        msg.attach(part1)
+        msg.attach(part2)
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+            server.starttls()
+            server.login(smtp_email, smtp_password)
+            server.sendmail(sender, [to_email], msg.as_string())
+
+        print(f"[WELCOME EMAIL] Successfully delivered welcome email to {to_email}")
+        return True
+    except Exception as e:
+        print(f"[WELCOME EMAIL WARNING] Failed to deliver email to {to_email}: {e}")
+        return False
+
+
+def send_welcome_email(to_email: str, user_name: str = "") -> None:
+    """
+    Sends a welcome email notification asynchronously in a background thread.
+    Never blocks the caller and never raises exceptions on SMTP failure.
+    """
+    try:
+        thread = threading.Thread(
+            target=_send_welcome_email_sync,
+            args=(to_email, user_name),
+            daemon=True
         )
+        thread.start()
+    except Exception as e:
+        print(f"[WELCOME EMAIL BACKGROUND ERROR] {e}")

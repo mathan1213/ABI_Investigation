@@ -15,13 +15,11 @@ from modules.auth_module import (
     check_login_rate_limit,
     record_login_attempt,
     verify_password,
-    create_and_send_otp,
-    verify_otp_attempt,
     create_access_token,
     log_activity,
     parse_permissions,
 )
-from routers.auth import UserResponse, AuthResponse, to_user_response, mask_email
+from routers.auth import UserResponse, AuthResponse, to_user_response
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -34,16 +32,12 @@ class AdminLoginRequest(BaseModel):
     identifier: str
     password: str
 
-class AdminVerifyOtpRequest(BaseModel):
-    userId: int
-    code: str
-
 class UserPatchRequest(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[str] = None
 
 
-@router.post("/login")
+@router.post("/login", response_model=AuthResponse)
 def admin_login(req: AdminLoginRequest, request: Request, db: Session = Depends(get_db)):
     client_ip = request.client.host if request.client else "127.0.0.1"
     check_login_rate_limit(client_ip)
@@ -55,34 +49,12 @@ def admin_login(req: AdminLoginRequest, request: Request, db: Session = Depends(
         .first()
     )
 
-    # Normal users get the EXACT same generic error so attacker cannot enumerate admins
     if not user or user.role not in ("admin", "super_admin") or not verify_password(req.password, user.password_hash):
         record_login_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Incorrect email, username or password.")
 
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="Your account has been deactivated.")
-
-    # Send admin OTP
-    create_and_send_otp(db, email=user.email, purpose="admin_login", user_id=user.id, client_ip=client_ip)
-
-    return {
-        "requiresOtp": True,
-        "userId": user.id,
-        "emailMasked": mask_email(user.email),
-        "message": f"Administrative verification code sent to {mask_email(user.email)}.",
-    }
-
-
-@router.post("/verify-login-otp", response_model=AuthResponse)
-def admin_verify_login_otp(req: AdminVerifyOtpRequest, db: Session = Depends(get_db)):
-    user = db.query(db_models.User).filter(db_models.User.id == req.userId).first()
-    if not user or user.role not in ("admin", "super_admin"):
-        raise HTTPException(status_code=401, detail="Invalid administrator session.")
-
-    verified, msg = verify_otp_attempt(db, email=user.email, purpose="admin_login", input_code=req.code)
-    if not verified:
-        raise HTTPException(status_code=400, detail=msg)
+        raise HTTPException(status_code=403, detail="Your administrator account has been deactivated.")
 
     user.last_login_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
@@ -100,12 +72,12 @@ def admin_verify_login_otp(req: AdminVerifyOtpRequest, db: Session = Depends(get
 
 
 # ---------------------------------------------------------------------------
-# Gated Admin Endpoints
+# Gated Admin Endpoints (admin-only, protected by role check)
 # ---------------------------------------------------------------------------
 
 @router.get("/overview")
 def get_admin_overview(
-    admin_user: db_models.User = Depends(require_permission("view_users")),
+    admin_user: db_models.User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -116,8 +88,8 @@ def get_admin_overview(
     new_users_7d = db.query(func.count(db_models.User.id)).filter(db_models.User.created_at >= seven_days_ago).scalar() or 0
 
     total_scans = db.query(func.count(db_models.Scan.id)).scalar() or 0
-    demo_scans = db.query(func.count(db_models.Scan.id)).filter(db_models.Scan.is_demo.is_(True)).scalar() or 0
-    real_scans = db.query(func.count(db_models.Scan.id)).filter(db_models.Scan.is_demo.is_(False)).scalar() or 0
+    total_files = db.query(func.count(db_models.UploadedFile.id)).scalar() or 0
+    total_reports = db.query(func.count(db_models.Report.id)).scalar() or 0
 
     module_rows = db.query(db_models.Scan.module, func.count(db_models.Scan.id)).group_by(db_models.Scan.module).all()
     scans_per_module = {m: count for m, count in module_rows}
@@ -144,8 +116,8 @@ def get_admin_overview(
         "totalUsers": total_users,
         "newUsers7d": new_users_7d,
         "totalScans": total_scans,
-        "realScans": real_scans,
-        "demoScans": demo_scans,
+        "totalFiles": total_files,
+        "totalReports": total_reports,
         "averageRisk": round(float(avg_risk), 1),
         "scansPerModule": {
             "telegram": scans_per_module.get("telegram", 0),
@@ -189,15 +161,27 @@ def get_admin_users(
     users = query.order_by(db_models.User.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
 
     user_ids = [u.id for u in users]
-    scan_counts_rows = (
+
+    scan_counts = dict(
         db.query(db_models.Scan.user_id, func.count(db_models.Scan.id))
         .filter(db_models.Scan.user_id.in_(user_ids))
         .group_by(db_models.Scan.user_id)
         .all()
-        if user_ids
-        else []
-    )
-    counts_map = {uid: c for uid, c in scan_counts_rows}
+    ) if user_ids else {}
+
+    file_counts = dict(
+        db.query(db_models.UploadedFile.user_id, func.count(db_models.UploadedFile.id))
+        .filter(db_models.UploadedFile.user_id.in_(user_ids))
+        .group_by(db_models.UploadedFile.user_id)
+        .all()
+    ) if user_ids else {}
+
+    report_counts = dict(
+        db.query(db_models.Report.user_id, func.count(db_models.Report.id))
+        .filter(db_models.Report.user_id.in_(user_ids))
+        .group_by(db_models.Report.user_id)
+        .all()
+    ) if user_ids else {}
 
     items = []
     for u in users:
@@ -209,10 +193,11 @@ def get_admin_users(
             "role": u.role,
             "permissions": parse_permissions(u.permissions),
             "isActive": u.is_active,
-            "isEmailVerified": u.is_email_verified,
             "createdAt": u.created_at,
             "lastLoginAt": u.last_login_at,
-            "scanCount": counts_map.get(u.id, 0),
+            "scanCount": scan_counts.get(u.id, 0),
+            "fileCount": file_counts.get(u.id, 0),
+            "reportCount": report_counts.get(u.id, 0),
         })
 
     return {
@@ -237,7 +222,8 @@ def get_user_detail(
     log_activity(db, "admin_viewed_user", user_id=admin_user.id, detail=f"Admin {admin_user.email} viewed details of user ID {user.id} ({user.email})")
 
     scans = db.query(db_models.Scan).filter(db_models.Scan.user_id == user.id).order_by(db_models.Scan.created_at.desc()).limit(50).all()
-    reports = db.query(db_models.Report).filter(db_models.Report.user_id == user.id).order_by(db_models.Report.created_at.desc()).limit(20).all()
+    reports = db.query(db_models.Report).filter(db_models.Report.user_id == user.id).order_by(db_models.Report.created_at.desc()).limit(50).all()
+    uploaded_files = db.query(db_models.UploadedFile).filter(db_models.UploadedFile.user_id == user.id).order_by(db_models.UploadedFile.uploaded_at.desc()).all()
     activities = db.query(db_models.ActivityLog).filter(db_models.ActivityLog.user_id == user.id).order_by(db_models.ActivityLog.created_at.desc()).limit(30).all()
 
     return {
@@ -249,10 +235,30 @@ def get_user_detail(
             "role": user.role,
             "permissions": parse_permissions(user.permissions),
             "isActive": user.is_active,
-            "isEmailVerified": user.is_email_verified,
             "createdAt": user.created_at,
             "lastLoginAt": user.last_login_at,
         },
+        "files": [
+            {
+                "id": f.id,
+                "filename": f.filename,
+                "fileSize": f.file_size,
+                "fileType": f.file_type,
+                "module": f.module,
+                "uploadedAt": f.uploaded_at,
+            }
+            for f in uploaded_files
+        ],
+        "reports": [
+            {
+                "id": r.id,
+                "overallScore": r.overall_score,
+                "overallRisk": r.overall_risk,
+                "reportJson": r.report_json,
+                "createdAt": r.created_at,
+            }
+            for r in reports
+        ],
         "scans": [
             {
                 "id": s.id,
@@ -266,15 +272,6 @@ def get_user_detail(
             }
             for s in scans
         ],
-        "reports": [
-            {
-                "id": r.id,
-                "overallScore": r.overall_score,
-                "overallRisk": r.overall_risk,
-                "createdAt": r.created_at,
-            }
-            for r in reports
-        ],
         "activity": [
             {
                 "id": a.id,
@@ -284,6 +281,93 @@ def get_user_detail(
             }
             for a in activities
         ],
+    }
+
+
+@router.get("/files")
+def get_all_uploaded_files(
+    search: Optional[str] = None,
+    user_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+    admin_user: db_models.User = Depends(require_permission("view_scans")),
+    db: Session = Depends(get_db),
+):
+    """View all files uploaded by each user."""
+    query = db.query(db_models.UploadedFile, db_models.User).join(db_models.User, db_models.UploadedFile.user_id == db_models.User.id)
+    if user_id:
+        query = query.filter(db_models.UploadedFile.user_id == user_id)
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            (db_models.UploadedFile.filename.ilike(s))
+            | (db_models.User.name.ilike(s))
+            | (db_models.User.email.ilike(s))
+        )
+    total_count = query.count()
+    rows = query.order_by(db_models.UploadedFile.uploaded_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    items = []
+    for f, u in rows:
+        items.append({
+            "id": f.id,
+            "userId": u.id,
+            "userName": u.name,
+            "userEmail": u.email,
+            "filename": f.filename,
+            "fileSize": f.file_size,
+            "fileType": f.file_type,
+            "module": f.module,
+            "uploadedAt": f.uploaded_at,
+        })
+    return {
+        "items": items,
+        "total": total_count,
+        "page": page,
+        "perPage": per_page,
+        "totalPages": (total_count + per_page - 1) // per_page if total_count > 0 else 1,
+    }
+
+
+@router.get("/reports")
+def get_all_user_reports(
+    search: Optional[str] = None,
+    user_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+    admin_user: db_models.User = Depends(require_permission("view_reports")),
+    db: Session = Depends(get_db),
+):
+    """View all reports submitted by each user."""
+    query = db.query(db_models.Report, db_models.User).join(db_models.User, db_models.Report.user_id == db_models.User.id)
+    if user_id:
+        query = query.filter(db_models.Report.user_id == user_id)
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            (db_models.User.name.ilike(s))
+            | (db_models.User.email.ilike(s))
+            | (db_models.Report.overall_risk.ilike(s))
+        )
+    total_count = query.count()
+    rows = query.order_by(db_models.Report.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    items = []
+    for r, u in rows:
+        items.append({
+            "id": r.id,
+            "userId": u.id,
+            "userName": u.name,
+            "userEmail": u.email,
+            "overallScore": r.overall_score,
+            "overallRisk": r.overall_risk,
+            "reportJson": r.report_json,
+            "createdAt": r.created_at,
+        })
+    return {
+        "items": items,
+        "total": total_count,
+        "page": page,
+        "perPage": per_page,
+        "totalPages": (total_count + per_page - 1) // per_page if total_count > 0 else 1,
     }
 
 
@@ -301,19 +385,18 @@ def update_user(
     if user.id == admin_user.id and patch.is_active is False:
         raise HTTPException(status_code=400, detail="Cannot deactivate your own administrator account.")
 
-    # Protect last active super admin
-    if user.role == "super_admin" and patch.is_active is False:
-        active_supers = (
+    # Protect last active admin
+    if user.role in ("admin", "super_admin") and patch.is_active is False:
+        active_admins = (
             db.query(db_models.User)
-            .filter(db_models.User.role == "super_admin", db_models.User.is_active.is_(True))
+            .filter(db_models.User.role.in_(["admin", "super_admin"]), db_models.User.is_active.is_(True))
             .count()
         )
-        if active_supers <= 1:
-            raise HTTPException(status_code=400, detail="Cannot disable the last active super administrator.")
+        if active_admins <= 1:
+            raise HTTPException(status_code=400, detail="Cannot disable the last active administrator.")
 
     if patch.is_active is not None:
         user.is_active = patch.is_active
-        # Invalidate sessions if deactivated
         if not patch.is_active:
             user.token_version = (user.token_version or 1) + 1
 
@@ -346,14 +429,14 @@ def delete_user(
     if user.id == admin_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own administrator account.")
 
-    if user.role == "super_admin":
-        active_supers = (
+    if user.role in ("admin", "super_admin"):
+        active_admins = (
             db.query(db_models.User)
-            .filter(db_models.User.role == "super_admin", db_models.User.is_active.is_(True))
+            .filter(db_models.User.role.in_(["admin", "super_admin"]), db_models.User.is_active.is_(True))
             .count()
         )
-        if active_supers <= 1:
-            raise HTTPException(status_code=400, detail="Cannot delete the last active super administrator.")
+        if active_admins <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last active administrator.")
 
     user_email = user.email
     db.delete(user)
@@ -406,19 +489,16 @@ def export_users_csv(
     users = db.query(db_models.User).order_by(db_models.User.id.asc()).all()
     user_ids = [u.id for u in users]
 
-    scan_counts_rows = (
+    scan_counts = dict(
         db.query(db_models.Scan.user_id, func.count(db_models.Scan.id))
         .filter(db_models.Scan.user_id.in_(user_ids))
         .group_by(db_models.Scan.user_id)
         .all()
-        if user_ids
-        else []
-    )
-    counts_map = {uid: c for uid, c in scan_counts_rows}
+    ) if user_ids else {}
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["id", "name", "username", "email", "role", "is_active", "is_email_verified", "created_at", "last_login_at", "scan_count"])
+    writer.writerow(["id", "name", "username", "email", "role", "is_active", "created_at", "last_login_at", "scan_count"])
 
     for u in users:
         writer.writerow([
@@ -428,10 +508,9 @@ def export_users_csv(
             u.email,
             u.role,
             u.is_active,
-            u.is_email_verified,
             u.created_at.isoformat() if u.created_at else "",
             u.last_login_at.isoformat() if u.last_login_at else "",
-            counts_map.get(u.id, 0),
+            scan_counts.get(u.id, 0),
         ])
 
     csv_data = output.getvalue()

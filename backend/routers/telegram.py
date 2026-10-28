@@ -26,6 +26,18 @@ async def analyze_telegram_logs(
     """
     result = await parse_and_analyze_telegram_export(files)
 
+    # Record uploaded files for admin visibility
+    for f in files:
+        file_size = getattr(f, "size", 0) or 0
+        uploaded_record = db_models.UploadedFile(
+            user_id=current_user.id,
+            filename=f.filename or "uploaded_log",
+            file_size=file_size,
+            file_type=f.content_type or "text/plain",
+            module="telegram",
+        )
+        db.add(uploaded_record)
+
     # Save sanitized scan summary to DB
     findings_summary = [
         {

@@ -25,7 +25,7 @@ class User(Base):
 
     scans = relationship("Scan", back_populates="user", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="user", cascade="all, delete-orphan")
-    otps = relationship("EmailOtp", back_populates="user", cascade="all, delete-orphan")
+    uploaded_files = relationship("UploadedFile", back_populates="user", cascade="all, delete-orphan")
 
 class Scan(Base):
     __tablename__ = "scans"
@@ -54,20 +54,18 @@ class Report(Base):
 
     user = relationship("User", back_populates="reports")
 
-class EmailOtp(Base):
-    __tablename__ = "email_otps"
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
-    email = Column(String(255), nullable=False, index=True)
-    purpose = Column(String(50), nullable=False, index=True)  # "register", "login", "admin_login", "password_reset"
-    code_hash = Column(String(255), nullable=False)
-    expires_at = Column(DateTime, nullable=False, index=True)
-    attempts = Column(Integer, default=0, nullable=False)
-    used = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    file_size = Column(Integer, default=0, nullable=False)
+    file_type = Column(String(100), nullable=True)
+    module = Column(String(50), default="telegram", nullable=False)
+    uploaded_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False, index=True)
 
-    user = relationship("User", back_populates="otps")
+    user = relationship("User", back_populates="uploaded_files")
 
 class ActivityLog(Base):
     __tablename__ = "activity_log"

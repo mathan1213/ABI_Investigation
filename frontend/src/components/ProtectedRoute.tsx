@@ -22,14 +22,11 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, adminO
   }
 
   if (!isAuthenticated) {
-    if (adminOnly || location.pathname.startsWith('/admin')) {
-      return <Navigate to="/admin/login" state={{ from: location }} replace />;
-    }
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   if (adminOnly && !isAdmin) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   return children;

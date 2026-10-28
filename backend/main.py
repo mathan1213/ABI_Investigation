@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import init_db, SessionLocal
 from models import HealthResponse
-from modules.auth_module import seed_admin_if_needed, cleanup_unverified_accounts
+from modules.auth_module import seed_admin_if_needed
 from routers.auth import router as auth_router
 from routers.admin import router as admin_router
 from routers.superadmin import router as superadmin_router
@@ -19,10 +19,9 @@ async def lifespan(app: FastAPI):
     # Initialize database tables and run SQLite column migrations
     init_db()
 
-    # Clean up old unverified accounts (>24h) and seed super admin if needed
+    # Seed admin if needed
     db = SessionLocal()
     try:
-        cleanup_unverified_accounts(db)
         seed_admin_if_needed(db)
     finally:
         db.close()
