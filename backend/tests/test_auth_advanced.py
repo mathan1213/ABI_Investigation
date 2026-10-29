@@ -100,6 +100,7 @@ async def test_username_uniqueness_case_insensitive_and_409(clean_db):
 async def test_welcome_email_and_instant_login(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
     with patch("routers.auth.send_welcome_email") as mock_email:
+        mock_email.return_value = (True, None)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             # 1. Register account
             r = await ac.post("/api/auth/register", json={

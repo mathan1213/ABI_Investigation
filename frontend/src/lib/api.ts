@@ -8,6 +8,8 @@ import {
   FullReport,
   User,
   AuthResponse,
+  RegisterResult,
+  ResendWelcomeEmailResult,
   CheckUsernameResult,
   AuditLogItem,
   EligibleUser,
@@ -109,14 +111,34 @@ export async function registerUser(
   username: string,
   email: string,
   password: string,
+  confirmPassword?: string,
   consent: boolean = true
-): Promise<{ success: boolean; message: string; email: string; userId: number }> {
+): Promise<RegisterResult> {
   const res = await fetch(`${API_BASE}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, username, email, password, consent }),
+    body: JSON.stringify({
+      name,
+      username,
+      email,
+      password,
+      confirm_password: confirmPassword,
+      confirmPassword,
+      consent,
+    }),
   });
-  return await handleResponse(res, "Failed to register account.");
+  return await handleResponse<RegisterResult>(res, "Failed to register account.");
+}
+
+export async function resendWelcomeEmail(
+  email: string
+): Promise<ResendWelcomeEmailResult> {
+  const res = await fetch(`${API_BASE}/api/auth/resend-welcome-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  return await handleResponse<ResendWelcomeEmailResult>(res, "Failed to resend welcome email.");
 }
 
 export async function loginUser(identifier: string, password: string): Promise<AuthResponse> {

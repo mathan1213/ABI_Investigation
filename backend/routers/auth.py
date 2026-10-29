@@ -39,7 +39,12 @@ class RegisterRequest(BaseModel):
     username: Optional[str] = None
     email: str
     password: str
+    confirm_password: Optional[str] = None
+    confirmPassword: Optional[str] = None
     consent: bool = False
+
+class ResendWelcomeEmailRequest(BaseModel):
+    email: str
 
 class LoginRequest(BaseModel):
     identifier: str  # Email or username
@@ -65,6 +70,7 @@ class UserResponse(BaseModel):
     is_active: bool
     is_email_verified: bool = True
     needs_username_change: bool = False
+    welcome_email_sent: bool = False
     created_at: datetime.datetime
     last_login_at: Optional[datetime.datetime] = None
 
@@ -96,6 +102,7 @@ def to_user_response(user: db_models.User) -> UserResponse:
         is_active=user.is_active,
         is_email_verified=bool(user.is_email_verified),
         needs_username_change=bool(user.needs_username_change),
+        welcome_email_sent=bool(getattr(user, "welcome_email_sent", False)),
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
@@ -166,6 +173,11 @@ def register(
     if not is_strong:
         raise HTTPException(status_code=400, detail=p_msg)
 
+    # Validate confirm password if provided
+    confirm_p = req.confirm_password if req.confirm_password is not None else req.confirmPassword
+    if confirm_p is not None and confirm_p != password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+
     # Validate username if provided, else generate one from email prefix
     if raw_username:
         is_valid_u, u_msg, u_reason = validate_username(raw_username)
@@ -208,15 +220,68 @@ def register(
 
     log_activity(db, "register", user_id=user.id, detail=f"Registered account for {email}")
 
-    # Send Welcome Email notification asynchronously via Gmail SMTP (never blocks)
-    send_welcome_email(to_email=email, user_name=name)
+    # Send Welcome Email notification via Gmail SMTP
+    email_sent, email_err = send_welcome_email(to_email=email, user_name=name)
+    if email_sent:
+        user.welcome_email_sent = True
+        user.welcome_email_sent_at = datetime.datetime.now(datetime.timezone.utc)
+        user.welcome_email_error = None
+        db.commit()
+        response_msg = "Registration successful! A welcome email has been sent to your registered email address."
+    else:
+        user.welcome_email_sent = False
+        user.welcome_email_error = (email_err or "Delivery failed")[:255]
+        db.commit()
+        response_msg = "Registration successful! However, we couldn't send the welcome email at this time (email service unavailable). You can still log in with your credentials."
 
     return {
         "success": True,
-        "message": "Account created successfully. Please sign in with your email and password.",
+        "email_sent": email_sent,
+        "message": response_msg,
         "email": email,
         "userId": user.id,
     }
+
+
+@router.post("/resend-welcome-email")
+def resend_welcome_email_endpoint(
+    req: ResendWelcomeEmailRequest,
+    db: Session = Depends(get_db),
+):
+    email = req.email.strip().lower()
+    user = db.query(db_models.User).filter(db_models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered account found with this email.")
+
+    if user.welcome_email_sent:
+        return {
+            "success": True,
+            "email_sent": True,
+            "already_sent": True,
+            "message": "Welcome email has already been sent to this account.",
+        }
+
+    email_sent, err = send_welcome_email(to_email=user.email, user_name=user.name)
+    if email_sent:
+        user.welcome_email_sent = True
+        user.welcome_email_sent_at = datetime.datetime.now(datetime.timezone.utc)
+        user.welcome_email_error = None
+        db.commit()
+        return {
+            "success": True,
+            "email_sent": True,
+            "already_sent": False,
+            "message": "Welcome email has been sent to your registered email address.",
+        }
+    else:
+        user.welcome_email_error = (err or "Delivery failed")[:255]
+        db.commit()
+        return {
+            "success": False,
+            "email_sent": False,
+            "already_sent": False,
+            "message": "Failed to send welcome email. Please verify SMTP server configuration.",
+        }
 
 
 @router.post("/login", response_model=AuthResponse)

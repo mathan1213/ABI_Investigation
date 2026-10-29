@@ -3,11 +3,19 @@ import pytest
 from main import app
 from database import init_db, SessionLocal
 import db_models
-from modules.auth_module import get_current_user, ALL_PERMISSIONS
+from modules.auth_module import get_current_user, ALL_PERMISSIONS, _login_attempts, _username_checks
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
     init_db()
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    _login_attempts.clear()
+    _username_checks.clear()
+    yield
+    _login_attempts.clear()
+    _username_checks.clear()
 
 @pytest.fixture(autouse=True)
 def default_auth_override():

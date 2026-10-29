@@ -20,6 +20,9 @@ class User(Base):
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime, nullable=True)
     needs_username_change = Column(Boolean, default=False, nullable=False)
+    welcome_email_sent = Column(Boolean, default=False, nullable=False)
+    welcome_email_sent_at = Column(DateTime, nullable=True)
+    welcome_email_error = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
     last_login_at = Column(DateTime, nullable=True)
 

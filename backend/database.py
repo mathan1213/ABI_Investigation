@@ -54,6 +54,12 @@ def init_db():
                 conn.execute(text("ALTER TABLE users ADD COLUMN locked_until DATETIME"))
             if "needs_username_change" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN needs_username_change BOOLEAN DEFAULT 0"))
+            if "welcome_email_sent" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_sent BOOLEAN DEFAULT 0"))
+            if "welcome_email_sent_at" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_sent_at DATETIME"))
+            if "welcome_email_error" not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_error VARCHAR(255)"))
 
     # Auto-generate unique username for existing users without username
     db = SessionLocal()

@@ -253,6 +253,8 @@ export interface User {
   isActive: boolean;
   isEmailVerified?: boolean;
   needsUsernameChange?: boolean;
+  welcomeEmailSent?: boolean;
+  welcome_email_sent?: boolean;
   createdAt: string;
   lastLoginAt?: string | null;
   scanCount?: number;
@@ -269,6 +271,21 @@ export interface CheckUsernameResult {
 export interface AuthResponse {
   token: string;
   user: User;
+}
+
+export interface RegisterResult {
+  success: boolean;
+  email_sent: boolean;
+  message: string;
+  email: string;
+  userId: number;
+}
+
+export interface ResendWelcomeEmailResult {
+  success: boolean;
+  email_sent: boolean;
+  already_sent?: boolean;
+  message: string;
 }
 
 export interface AuditLogItem {

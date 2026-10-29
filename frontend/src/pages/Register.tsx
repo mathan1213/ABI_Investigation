@@ -10,8 +10,11 @@ import {
   CheckCircle2,
   ArrowRight,
   Loader2,
+  RefreshCw,
+  Send,
 } from 'lucide-react';
-import { checkUsername, registerUser } from '../lib/api';
+import { checkUsername, registerUser, resendWelcomeEmail } from '../lib/api';
+import { RegisterResult } from '../lib/types';
 
 export const Register: React.FC = () => {
   const navigate = useNavigate();
@@ -21,11 +24,18 @@ export const Register: React.FC = () => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [consentAgreed, setConsentAgreed] = useState(false);
 
   // Status & Errors
   const [formError, setFormError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Registration Result (for dedicated success view with resend option)
+  const [regResult, setRegResult] = useState<RegisterResult | null>(null);
+  const [isResending, setIsResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
 
   // Username validation state
   const [usernameStatus, setUsernameStatus] = useState<
@@ -140,6 +150,11 @@ export const Register: React.FC = () => {
       return;
     }
 
+    if (password !== confirmPassword) {
+      setFormError('Passwords do not match. Please re-enter matching passwords.');
+      return;
+    }
+
     if (!consentAgreed) {
       setFormError('Please agree to the data storage and privacy terms by checking the box below.');
       return;
@@ -147,14 +162,16 @@ export const Register: React.FC = () => {
 
     setIsLoading(true);
     try {
-      await registerUser(trimmedName, trimmedUsername, trimmedEmail, password, consentAgreed);
-      // Registration complete: immediate database save, redirect to login
-      navigate('/login', {
-        state: {
-          successMessage: 'Account created successfully! Please sign in with your email and password.',
-          registeredEmail: trimmedEmail,
-        },
-      });
+      const result = await registerUser(
+        trimmedName,
+        trimmedUsername,
+        trimmedEmail,
+        password,
+        confirmPassword,
+        consentAgreed
+      );
+
+      setRegResult(result);
     } catch (err: any) {
       const msg = err?.message || '';
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed')) {
@@ -166,6 +183,176 @@ export const Register: React.FC = () => {
       setIsLoading(false);
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Handle Resend Confirmation Email
+  // ---------------------------------------------------------------------------
+  const handleResendEmail = async () => {
+    if (!regResult?.email || isResending) return;
+    setIsResending(true);
+    setResendStatus(null);
+    setResendError(null);
+
+    try {
+      const res = await resendWelcomeEmail(regResult.email);
+      if (res.email_sent) {
+        setResendStatus(res.message);
+        setRegResult({ ...regResult, email_sent: true });
+      } else {
+        setResendError(res.message || 'Unable to deliver welcome email. Please check server SMTP configuration.');
+      }
+    } catch (err: any) {
+      setResendError(err?.message || 'Failed to resend welcome email.');
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const handleProceedToLogin = () => {
+    if (!regResult) {
+      navigate('/login');
+      return;
+    }
+    const message = regResult.email_sent
+      ? 'Registration successful! A welcome email has been sent to your registered email address.'
+      : regResult.message || 'Registration successful! You can now sign in with your email and password.';
+
+    navigate('/login', {
+      state: {
+        successMessage: message,
+        registeredEmail: regResult.email,
+        emailSent: regResult.email_sent,
+      },
+    });
+  };
+
+  // ---------------------------------------------------------------------------
+  // Dedicated Success View when Account is Created
+  // ---------------------------------------------------------------------------
+  if (regResult) {
+    return (
+      <div className="min-h-[calc(100vh-140px)] flex items-center justify-center px-4 py-12">
+        <div className="max-w-md w-full bg-[#111827] border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden text-center space-y-6">
+          <div className="absolute -top-24 -right-24 w-48 h-48 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+
+          {/* Status Icon */}
+          <div className="flex justify-center">
+            {regResult.email_sent ? (
+              <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+            ) : (
+              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-lg shadow-amber-500/20">
+                <Mail className="w-8 h-8" />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              {regResult.email_sent ? 'Registration Successful!' : 'Account Created Successfully!'}
+            </h1>
+            <p className="text-xs text-slate-400 mt-1">
+              Account Breach Investigation Platform
+            </p>
+          </div>
+
+          {/* Message Banner */}
+          <div
+            className={`p-4 rounded-xl text-left border text-xs leading-relaxed ${
+              regResult.email_sent
+                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                : 'bg-amber-950/40 border-amber-800/60 text-amber-300'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {regResult.email_sent ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                <p className="font-semibold text-slate-100">
+                  {regResult.email_sent
+                    ? 'Registration successful! A welcome email has been sent to your registered email address.'
+                    : 'Account created, but welcome email delivery was not completed.'}
+                </p>
+                <p className="text-slate-300">
+                  {regResult.email_sent
+                    ? `We dispatched a confirmation email to ${regResult.email}. Check your inbox or spam folder.`
+                    : "The email server could not deliver the notification at this time. Don't worry—your account is active, securely saved in the database, and ready to use."}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* User Details Preview */}
+          <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-3.5 text-left text-xs space-y-1.5">
+            <div className="flex justify-between items-center text-slate-400">
+              <span>Account Email:</span>
+              <span className="font-mono text-slate-200">{regResult.email}</span>
+            </div>
+            <div className="flex justify-between items-center text-slate-400">
+              <span>Email Delivery Status:</span>
+              <span
+                className={`font-semibold ${
+                  regResult.email_sent ? 'text-emerald-400' : 'text-amber-400'
+                }`}
+              >
+                {regResult.email_sent ? 'Delivered via SMTP' : 'Delivery Pending / Unconfigured'}
+              </span>
+            </div>
+          </div>
+
+          {/* Resend status banners */}
+          {resendStatus && (
+            <div className="p-3 bg-emerald-900/30 border border-emerald-800/60 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{resendStatus}</span>
+            </div>
+          )}
+          {resendError && (
+            <div className="p-3 bg-red-900/30 border border-red-800/60 rounded-xl text-xs text-red-300 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{resendError}</span>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="space-y-2.5 pt-2">
+            <button
+              onClick={handleProceedToLogin}
+              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-medium rounded-xl text-sm transition-all duration-150 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 cursor-pointer"
+            >
+              <span>Proceed to Sign In</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+
+            {!regResult.email_sent && (
+              <button
+                type="button"
+                onClick={handleResendEmail}
+                disabled={isResending}
+                className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-300 hover:text-white font-medium rounded-xl text-xs transition-colors flex items-center justify-center gap-2 border border-slate-700 cursor-pointer disabled:opacity-50"
+              >
+                {isResending ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Attempting SMTP Delivery...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Retry Welcome Email Delivery</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[calc(100vh-140px)] flex items-center justify-center px-4 py-12">
@@ -214,7 +401,7 @@ export const Register: React.FC = () => {
           {/* Username with Live Debounced Availability */}
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1.5 uppercase tracking-wider">
-              Username (Unique handle)
+              Username
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -309,6 +496,45 @@ export const Register: React.FC = () => {
                 className="w-full bg-[#0B0F19] border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-colors"
               />
             </div>
+          </div>
+
+          {/* Confirm Password */}
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1.5 uppercase tracking-wider">
+              Confirm Password
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
+                <Lock className="w-4 h-4" />
+              </div>
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                className={`w-full bg-[#0B0F19] border rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition-colors ${
+                  confirmPassword && confirmPassword !== password
+                    ? 'border-red-500/60 focus:ring-2 focus:ring-red-500/50'
+                    : confirmPassword && confirmPassword === password
+                    ? 'border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/50'
+                    : 'border-slate-700/80 focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500'
+                }`}
+              />
+            </div>
+            {confirmPassword && confirmPassword !== password && (
+              <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Passwords do not match</span>
+              </p>
+            )}
+            {confirmPassword && confirmPassword === password && (
+              <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Passwords match</span>
+              </p>
+            )}
           </div>
 
           {/* Consent Checkbox */}

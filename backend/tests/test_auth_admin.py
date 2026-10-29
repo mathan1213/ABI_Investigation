@@ -29,6 +29,7 @@ def clean_db():
 async def test_auth_registration_and_password_hashing(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
     with patch("routers.auth.send_welcome_email") as mock_email:
+        mock_email.return_value = (True, None)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             # 1. Invalid email
             res = await ac.post("/api/auth/register", json={
@@ -61,7 +62,8 @@ async def test_auth_registration_and_password_hashing(clean_db):
             assert res.status_code == 200
             data = res.json()
             assert data["success"] is True
-            assert "created" in data["message"].lower()
+            assert "registration successful" in data["message"].lower() or "created" in data["message"].lower()
+            assert data["email_sent"] is True
 
             # Welcome email triggered
             mock_email.assert_called_once_with(to_email="alice@test.com", user_name="Alice Smith")

@@ -37,10 +37,18 @@ class Settings(BaseSettings):
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_EMAIL: Optional[str] = None
-    SMTP_APP_PASSWORD: Optional[str] = None
-    SMTP_USER: Optional[str] = None
     SMTP_PASSWORD: Optional[str] = None
+    SMTP_USER: Optional[str] = None
+    SMTP_APP_PASSWORD: Optional[str] = None
     SMTP_FROM: Optional[str] = None
+
+    @property
+    def smtp_username(self) -> Optional[str]:
+        return self.SMTP_EMAIL or self.SMTP_USER
+
+    @property
+    def smtp_pass(self) -> Optional[str]:
+        return self.SMTP_PASSWORD or self.SMTP_APP_PASSWORD
 
     # Security & Policy Settings
     AUTH_LOGIN_RATE_LIMIT: int = 10
