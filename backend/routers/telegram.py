@@ -7,6 +7,7 @@ from database import get_db
 import db_models
 from models import TelegramScanResult
 from modules.auth_module import get_current_user, log_activity
+from modules.file_storage import save_user_uploaded_file
 from modules.telegram_log_parser import parse_and_analyze_telegram_export
 
 router = APIRouter(prefix="/api/telegram", tags=["Telegram Security"])
@@ -24,19 +25,27 @@ async def analyze_telegram_logs(
     Saves only sanitized findings summary to the database.
     Never stores uploaded files, message text, or verification codes.
     """
-    result = await parse_and_analyze_telegram_export(files)
-
-    # Record uploaded files for admin visibility
+    # Save uploaded files into user's isolated directory and record in DB
     for f in files:
-        file_size = getattr(f, "size", 0) or 0
+        content = await f.read()
+        await f.seek(0)
+        stored_name, rel_path, actual_size = save_user_uploaded_file(
+            user_id=current_user.id,
+            original_filename=f.filename or "telegram_export.json",
+            content=content,
+        )
         uploaded_record = db_models.UploadedFile(
             user_id=current_user.id,
             filename=f.filename or "uploaded_log",
-            file_size=file_size,
+            stored_filename=stored_name,
+            file_path=rel_path,
+            file_size=actual_size,
             file_type=f.content_type or "text/plain",
             module="telegram",
         )
         db.add(uploaded_record)
+
+    result = await parse_and_analyze_telegram_export(files)
 
     # Save sanitized scan summary to DB
     findings_summary = [

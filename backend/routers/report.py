@@ -1,15 +1,15 @@
 import json
 import time
 from collections import defaultdict
-from typing import Dict, List
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Dict, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
 from sqlalchemy.orm import Session
 
 from config import settings
 from database import get_db
 import db_models
 from models import GenerateReportRequest, GenerateReportResponse
-from modules.auth_module import get_current_user, log_activity
+from modules.auth_module import get_current_user, log_activity, has_permission
 from modules.risk_engine import generate_comprehensive_report
 
 router = APIRouter(prefix="/api/report", tags=["Risk Engine & Reports"])
@@ -108,3 +108,114 @@ def log_download_pdf(
     """Logs the download_pdf event when user downloads dossier PDF."""
     log_activity(db, "download_pdf", user_id=current_user.id, detail="Downloaded PDF investigation dossier")
     return {"success": True}
+
+
+@router.get("/history", summary="List current user's generated reports")
+def list_user_reports(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=1, le=100),
+    current_user: db_models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns reports created strictly by the authenticated user.
+    Never exposes other users' reports.
+    """
+    page_val = page if isinstance(page, int) else 1
+    per_page_val = per_page if isinstance(per_page, int) else 25
+
+    query = db.query(db_models.Report).filter(db_models.Report.user_id == current_user.id)
+    total_count = query.count()
+    records = (
+        query.order_by(db_models.Report.created_at.desc())
+        .offset((page_val - 1) * per_page_val)
+        .limit(per_page_val)
+        .all()
+    )
+
+    items = []
+    for r in records:
+        items.append({
+            "id": r.id,
+            "overallScore": r.overall_score,
+            "overallRisk": r.overall_risk,
+            "createdAt": r.created_at,
+        })
+
+    return {
+        "items": items,
+        "total": total_count,
+        "page": page_val,
+        "perPage": per_page_val,
+        "totalPages": (total_count + per_page_val - 1) // per_page_val if total_count > 0 else 1,
+    }
+
+
+@router.get("/{report_id}", summary="Get a specific report owned by the user")
+def get_user_report(
+    report_id: int,
+    current_user: db_models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Retrieves a single report if owned by the authenticated user (or authorized admin).
+    Verifies ownership to prevent IDOR attacks.
+    """
+    report = db.query(db_models.Report).filter(db_models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+
+    is_owner = report.user_id == current_user.id
+    is_authorized_admin = (
+        current_user.role in ("admin", "super_admin") and has_permission(current_user, "view_reports")
+    )
+    if not is_owner and not is_authorized_admin:
+        # Return 404 to prevent ID enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+
+    try:
+        report_data = json.loads(report.report_json)
+    except Exception:
+        report_data = {}
+
+    return {
+        "id": report.id,
+        "userId": report.user_id,
+        "overallScore": report.overall_score,
+        "overallRisk": report.overall_risk,
+        "reportData": report_data,
+        "createdAt": report.created_at,
+    }
+
+
+@router.delete("/{report_id}", summary="Delete an authenticated user's report")
+def delete_user_report(
+    report_id: int,
+    current_user: db_models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Deletes a report owned by the authenticated user.
+    """
+    report = db.query(db_models.Report).filter(db_models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+
+    is_owner = report.user_id == current_user.id
+    is_authorized_admin = (
+        current_user.role in ("admin", "super_admin") and has_permission(current_user, "delete_users")
+    )
+    if not is_owner and not is_authorized_admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
+
+    db.delete(report)
+    db.commit()
+
+    log_activity(
+        db,
+        action="delete_report",
+        user_id=current_user.id,
+        detail=f"Deleted report ID {report_id}",
+    )
+
+    return {"success": True, "message": "Report deleted successfully."}

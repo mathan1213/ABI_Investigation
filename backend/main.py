@@ -12,6 +12,8 @@ from routers.network import router as network_router
 from routers.repo import router as repo_router
 from routers.telegram import router as telegram_router
 from routers.report import router as report_router
+from routers.files import router as files_router
+from routers.scans import router as scans_router
 
 
 @asynccontextmanager
@@ -65,6 +67,8 @@ app.include_router(network_router)
 app.include_router(repo_router)
 app.include_router(telegram_router)
 app.include_router(report_router)
+app.include_router(files_router)
+app.include_router(scans_router)
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Send,
@@ -11,8 +11,22 @@ import {
   Clock,
   ExternalLink,
   AlertTriangle,
+  FileText,
+  Download,
+  Trash2,
+  UploadCloud,
+  File,
 } from 'lucide-react';
 import { useScan } from '../context/ScanContext';
+import {
+  getUserFiles,
+  downloadUserFile,
+  deleteUserFile,
+  getUserReports,
+  deleteUserReport,
+  UserFileItem,
+  UserReportHistoryItem,
+} from '../lib/api';
 import { StatCard } from '../components/StatCard';
 import { RiskGauge } from '../components/RiskGauge';
 import { RiskBadge } from '../components/RiskBadge';
@@ -42,6 +56,60 @@ export const Dashboard: React.FC = () => {
     overallRisk,
     hasAnyScan,
   } = useScan();
+
+  const [myFiles, setMyFiles] = useState<UserFileItem[]>([]);
+  const [myReports, setMyReports] = useState<UserReportHistoryItem[]>([]);
+  const [isFilesLoading, setIsFilesLoading] = useState(false);
+  const [isReportsLoading, setIsReportsLoading] = useState(false);
+
+  const loadUserData = async () => {
+    setIsFilesLoading(true);
+    setIsReportsLoading(true);
+    try {
+      const filesRes = await getUserFiles({ perPage: 10 });
+      setMyFiles(filesRes.items || []);
+    } catch {} finally {
+      setIsFilesLoading(false);
+    }
+    try {
+      const reportsRes = await getUserReports({ perPage: 10 });
+      setMyReports(reportsRes.items || []);
+    } catch {} finally {
+      setIsReportsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const handleDownload = async (fileId: number, filename: string) => {
+    try {
+      await downloadUserFile(fileId, filename);
+    } catch (err: any) {
+      alert(err.message || 'Download failed');
+    }
+  };
+
+  const handleDeleteFile = async (fileId: number) => {
+    if (!confirm('Are you sure you want to delete this file?')) return;
+    try {
+      await deleteUserFile(fileId);
+      setMyFiles((prev) => prev.filter((f) => f.id !== fileId));
+    } catch (err: any) {
+      alert(err.message || 'Delete failed');
+    }
+  };
+
+  const handleDeleteReport = async (reportId: number) => {
+    if (!confirm('Are you sure you want to delete this report?')) return;
+    try {
+      await deleteUserReport(reportId);
+      setMyReports((prev) => prev.filter((r) => r.id !== reportId));
+    } catch (err: any) {
+      alert(err.message || 'Delete failed');
+    }
+  };
 
   const isTgScanned = telegramScan !== null;
   const isRepoScanned = repoScan !== null;
@@ -526,6 +594,142 @@ export const Dashboard: React.FC = () => {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Grid: My Private Files & Saved Reports */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* User's Uploaded Files */}
+        <div className="glass-card rounded-2xl p-6 border border-slate-800 flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-400">
+                <UploadCloud size={18} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">My Uploaded Files</h3>
+                <p className="text-xs text-slate-400">Private files saved in your secure workspace</p>
+              </div>
+            </div>
+            <span className="text-xs font-mono text-purple-400 bg-purple-950/40 px-2.5 py-1 rounded-md border border-purple-800/40">
+              {myFiles.length} Files
+            </span>
+          </div>
+
+          <div className="flex-1 overflow-x-auto">
+            {myFiles.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500">
+                No uploaded files yet. Files uploaded during Telegram log audits will appear here securely.
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-[#0B1220]/80 text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th className="px-3 py-2">Filename</th>
+                    <th className="px-3 py-2">Size</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {myFiles.map((file) => (
+                    <tr key={file.id} className="hover:bg-slate-800/20 transition-colors">
+                      <td className="px-3 py-2.5 font-medium text-slate-200 truncate max-w-[180px]">
+                        {file.filename}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-400">
+                        {(file.fileSize / 1024).toFixed(1)} KB
+                      </td>
+                      <td className="px-3 py-2.5 text-right space-x-2">
+                        <button
+                          onClick={() => handleDownload(file.id, file.filename)}
+                          className="inline-flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300"
+                          title="Download file securely"
+                        >
+                          <Download size={13} />
+                          <span>Download</span>
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFile(file.id)}
+                          className="inline-flex items-center text-red-400/80 hover:text-red-400"
+                          title="Delete file"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* User's Saved Reports */}
+        <div className="glass-card rounded-2xl p-6 border border-slate-800 flex flex-col">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+                <FileText size={18} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">My Saved Reports</h3>
+                <p className="text-xs text-slate-400">Security dossiers compiled for your account</p>
+              </div>
+            </div>
+            <span className="text-xs font-mono text-cyan-400 bg-cyan-950/40 px-2.5 py-1 rounded-md border border-cyan-800/40">
+              {myReports.length} Reports
+            </span>
+          </div>
+
+          <div className="flex-1 overflow-x-auto">
+            {myReports.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500">
+                No saved reports yet. Compile an investigation dossier to save it to your account.
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-[#0B1220]/80 text-[10px] uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th className="px-3 py-2">Report ID</th>
+                    <th className="px-3 py-2">Score</th>
+                    <th className="px-3 py-2">Risk Level</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {myReports.map((report) => (
+                    <tr key={report.id} className="hover:bg-slate-800/20 transition-colors">
+                      <td className="px-3 py-2.5 font-medium text-slate-200">
+                        #{report.id}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-cyan-300">
+                        {report.overallScore}/100
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <RiskBadge level={report.overallRisk as RiskLevel} size="sm" />
+                      </td>
+                      <td className="px-3 py-2.5 text-right space-x-2">
+                        <Link
+                          to="/report"
+                          className="inline-flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300"
+                        >
+                          <ExternalLink size={13} />
+                          <span>View</span>
+                        </Link>
+                        <button
+                          onClick={() => handleDeleteReport(report.id)}
+                          className="inline-flex items-center text-red-400/80 hover:text-red-400"
+                          title="Delete report"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </div>
     </div>

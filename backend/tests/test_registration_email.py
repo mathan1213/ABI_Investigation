@@ -20,7 +20,8 @@ def clean_db():
         db.query(db_models.ActivityLog).delete()
         db.query(db_models.Report).delete()
         db.query(db_models.Scan).delete()
-        db.query(db_models.User).delete()
+        # Keep real admin accounts safe
+        db.query(db_models.User).filter(~db_models.User.email.in_(["63796174@gmail.com", "mathan63796174@gmail.com", "admin@breach-investigation.local"])).delete()
         db.commit()
     finally:
         db.close()

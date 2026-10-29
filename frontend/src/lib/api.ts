@@ -610,4 +610,142 @@ export async function getAdminReports(params?: {
   return await handleResponse(res, "Failed to load reports.");
 }
 
+// ---------------------------------------------------------------------------
+// Strict Per-User Isolated Files, Scans & Reports API
+// ---------------------------------------------------------------------------
+
+export interface UserFileItem {
+  id: number;
+  filename: string;
+  fileSize: number;
+  fileType: string;
+  module: string;
+  uploadedAt: string;
+}
+
+export async function getUserFiles(params?: {
+  module?: string;
+  page?: number;
+  perPage?: number;
+}): Promise<{ items: UserFileItem[]; total: number; page: number; perPage: number; totalPages: number }> {
+  const query = new URLSearchParams();
+  if (params?.module) query.set("module", params.module);
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.perPage) query.set("per_page", String(params.perPage));
+
+  const res = await fetch(`${API_BASE}/api/files?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to fetch user files.");
+}
+
+export async function downloadUserFile(fileId: number, filename?: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/files/${fileId}/download`, {
+    headers: { ...getAuthHeaders() },
+  });
+  if (!res.ok) {
+    let msg = "Failed to download file.";
+    try {
+      const err = await res.json();
+      if (err.detail) msg = err.detail;
+    } catch {}
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || `file_${fileId}.bin`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function deleteUserFile(fileId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/files/${fileId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to delete file.");
+}
+
+export interface UserScanItem {
+  id: number;
+  module: string;
+  targetLabel: string;
+  riskScore: number;
+  riskLevel: string;
+  createdAt: string;
+  findingsCount: number;
+  findings: any[];
+}
+
+export async function getUserScans(params?: {
+  module?: string;
+  page?: number;
+  perPage?: number;
+}): Promise<{ items: UserScanItem[]; total: number; page: number; perPage: number; totalPages: number }> {
+  const query = new URLSearchParams();
+  if (params?.module) query.set("module", params.module);
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.perPage) query.set("per_page", String(params.perPage));
+
+  const res = await fetch(`${API_BASE}/api/scans/history?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load user scan history.");
+}
+
+export async function getUserScan(scanId: number): Promise<UserScanItem> {
+  const res = await fetch(`${API_BASE}/api/scans/${scanId}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load scan details.");
+}
+
+export async function deleteUserScan(scanId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/scans/${scanId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to delete scan.");
+}
+
+export interface UserReportHistoryItem {
+  id: number;
+  overallScore: number;
+  overallRisk: string;
+  createdAt: string;
+}
+
+export async function getUserReports(params?: {
+  page?: number;
+  perPage?: number;
+}): Promise<{ items: UserReportHistoryItem[]; total: number; page: number; perPage: number; totalPages: number }> {
+  const query = new URLSearchParams();
+  if (params?.page) query.set("page", String(params.page));
+  if (params?.perPage) query.set("per_page", String(params.perPage));
+
+  const res = await fetch(`${API_BASE}/api/report/history?${query.toString()}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load report history.");
+}
+
+export async function getUserReport(reportId: number): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/report/${reportId}`, {
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to load report dossier.");
+}
+
+export async function deleteUserReport(reportId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_BASE}/api/report/${reportId}`, {
+    method: "DELETE",
+    headers: { ...getAuthHeaders() },
+  });
+  return await handleResponse(res, "Failed to delete report.");
+}
+
 

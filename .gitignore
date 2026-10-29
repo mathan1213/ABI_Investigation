@@ -10,4 +10,6 @@ dist/
 *.sqlite
 *.sqlite3
 app.db
+backend/uploads/
+uploads/
 

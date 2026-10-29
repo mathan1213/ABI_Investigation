@@ -417,6 +417,8 @@ export const AdminDashboard: React.FC = () => {
   const isTabAllowed = (tab: AdminTab): boolean => {
     if (tab === 'overview') return hasPermission('view_users') || hasPermission('view_scans');
     if (tab === 'users') return hasPermission('view_users');
+    if (tab === 'uploaded_files') return hasPermission('view_scans') || isAdmin;
+    if (tab === 'user_reports') return hasPermission('view_reports') || isAdmin;
     if (tab === 'scans_reports') return hasPermission('view_scans') || hasPermission('view_reports');
     if (tab === 'activity') return hasPermission('view_activity');
     if (tab === 'export') return hasPermission('export_data');

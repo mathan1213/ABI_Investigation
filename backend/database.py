@@ -61,6 +61,32 @@ def init_db():
             if "welcome_email_error" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_error VARCHAR(255)"))
 
+    if "uploaded_files" in inspector.get_table_names():
+        uf_cols = {c["name"] for c in inspector.get_columns("uploaded_files")}
+        with engine.begin() as conn:
+            if "stored_filename" not in uf_cols:
+                conn.execute(text("ALTER TABLE uploaded_files ADD COLUMN stored_filename VARCHAR(255)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploaded_files_stored_filename ON uploaded_files (stored_filename)"))
+            if "file_path" not in uf_cols:
+                conn.execute(text("ALTER TABLE uploaded_files ADD COLUMN file_path VARCHAR(500)"))
+            if "user_id" not in uf_cols:
+                conn.execute(text("ALTER TABLE uploaded_files ADD COLUMN user_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_uploaded_files_user_id ON uploaded_files (user_id)"))
+
+    if "scans" in inspector.get_table_names():
+        s_cols = {c["name"] for c in inspector.get_columns("scans")}
+        with engine.begin() as conn:
+            if "user_id" not in s_cols:
+                conn.execute(text("ALTER TABLE scans ADD COLUMN user_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_scans_user_id ON scans (user_id)"))
+
+    if "reports" in inspector.get_table_names():
+        r_cols = {c["name"] for c in inspector.get_columns("reports")}
+        with engine.begin() as conn:
+            if "user_id" not in r_cols:
+                conn.execute(text("ALTER TABLE reports ADD COLUMN user_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reports_user_id ON reports (user_id)"))
+
     # Auto-generate unique username for existing users without username
     db = SessionLocal()
     try:

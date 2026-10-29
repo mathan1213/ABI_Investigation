@@ -63,6 +63,8 @@ class UploadedFile(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = Column(String(255), nullable=False)
+    stored_filename = Column(String(255), nullable=True, index=True)
+    file_path = Column(String(500), nullable=True)
     file_size = Column(Integer, default=0, nullable=False)
     file_type = Column(String(100), nullable=True)
     module = Column(String(50), default="telegram", nullable=False)

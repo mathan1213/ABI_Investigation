@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
+import { useAuth } from './AuthContext';
 import {
   TelegramScanResult,
   RepoScanResult,
@@ -17,6 +18,7 @@ import {
   checkLink,
   checkWebsite,
   getReport,
+  getUserScans,
 } from '../lib/api';
 
 interface ScanContextType {
@@ -37,7 +39,7 @@ interface ScanContextType {
   setIpScan: (res: IpCheckResult) => void;
   setLinkScan: (res: LinkCheckResult) => void;
   setWebsiteScan: (res: WebsiteCheckResult) => void;
-  clearAllScans: () => void;
+  clearAllScans: (silent?: boolean | React.MouseEvent) => void;
   addToast: (toast: Omit<ToastNotification, 'id'>) => void;
   removeToast: (id: string) => void;
 }
@@ -165,7 +167,11 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setRecentScans((prev) => [scan, ...prev.slice(0, 7)]);
   };
 
-  const clearAllScans = () => {
+  const { user } = useAuth();
+  const currentUserIdRef = useRef<number | null>(null);
+
+  const clearAllScans = (silent?: boolean | React.MouseEvent) => {
+    const isSilent = typeof silent === 'boolean' ? silent : false;
     setTelegramScanState(null);
     setRepoScanState(null);
     setNetworkScanState({});
@@ -178,12 +184,52 @@ export const ScanProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('abi_demo_modules');
       localStorage.removeItem('abi_recent_scans');
     } catch {}
-    addToast({
-      type: 'info',
-      title: 'Session Scans Cleared',
-      message: 'All in-memory scan records have been deleted.',
-    });
+    if (!isSilent) {
+      addToast({
+        type: 'info',
+        title: 'Session Scans Cleared',
+        message: 'All in-memory scan records have been deleted.',
+      });
+    }
   };
+
+  // Strict Per-User Data Isolation: wipe on user change/logout, load on login
+  useEffect(() => {
+    const nextUserId = user?.id ?? null;
+    if (currentUserIdRef.current !== nextUserId) {
+      currentUserIdRef.current = nextUserId;
+      clearAllScans(true);
+
+      if (nextUserId) {
+        getUserScans({ perPage: 10 })
+          .then((res) => {
+            if (res.items && res.items.length > 0) {
+              const loaded: RecentScan[] = res.items.map((s) => {
+                let scanType: 'Telegram' | 'Repository' | 'Network IP' | 'Network Link' | 'Network Website' = 'Network IP';
+                if (s.module === 'telegram') scanType = 'Telegram';
+                else if (s.module === 'repo') scanType = 'Repository';
+                else if (s.targetLabel.startsWith('URL:')) scanType = 'Network Link';
+                else if (s.targetLabel.startsWith('Domain:')) scanType = 'Network Website';
+
+                return {
+                  id: `sc-${s.id}`,
+                  date: new Date(s.createdAt).toLocaleDateString(),
+                  type: scanType,
+                  target: s.targetLabel,
+                  riskLevel: s.riskLevel as RiskLevel,
+                  score: s.riskScore,
+                  status: (s.riskScore > 50 ? 'Alert' : 'Secure') as 'Alert' | 'Secure',
+                };
+              });
+              setRecentScans(loaded);
+            }
+          })
+          .catch(() => {
+            // Silently continue if fresh session
+          });
+      }
+    }
+  }, [user?.id]);
 
   const hasAnyScan = Boolean(
     telegramScan || repoScan || networkScan.ipResult || networkScan.linkResult || networkScan.websiteResult

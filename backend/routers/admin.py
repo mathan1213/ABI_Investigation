@@ -285,6 +285,7 @@ def get_user_detail(
 
 
 @router.get("/files")
+@router.get("/uploads")
 def get_all_uploaded_files(
     search: Optional[str] = None,
     user_id: Optional[int] = None,

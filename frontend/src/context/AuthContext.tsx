@@ -65,15 +65,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    await apiLogout();
+    try {
+      await apiLogout();
+    } catch {
+      // Continue client cleanup even if network fails
+    }
     setUser(null);
     setToken(null);
+    try {
+      localStorage.removeItem('abi_tg_scan');
+      localStorage.removeItem('abi_repo_scan');
+      localStorage.removeItem('abi_net_scan');
+      localStorage.removeItem('abi_demo_modules');
+      localStorage.removeItem('abi_recent_scans');
+      sessionStorage.clear();
+    } catch {}
   };
 
   const deleteAccount = async () => {
-    await apiDeleteMyAccount();
+    try {
+      await apiDeleteMyAccount();
+    } catch {
+      // Continue client cleanup
+    }
     setUser(null);
     setToken(null);
+    try {
+      localStorage.removeItem('abi_tg_scan');
+      localStorage.removeItem('abi_repo_scan');
+      localStorage.removeItem('abi_net_scan');
+      localStorage.removeItem('abi_demo_modules');
+      localStorage.removeItem('abi_recent_scans');
+      sessionStorage.clear();
+    } catch {}
   };
 
   const isAuthenticated = Boolean(user && token);
@@ -84,6 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!user) return false;
     if (user.role === 'super_admin') return true;
     if (user.role === 'admin') {
+      if (!user.permissions || user.permissions.length === 0) return true;
       return Boolean(user.permissions && user.permissions.includes(perm));
     }
     return false;
