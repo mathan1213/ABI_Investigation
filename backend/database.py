@@ -1,4 +1,6 @@
 import re
+import os
+import shutil
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config import settings
@@ -20,6 +22,22 @@ def get_db():
     finally:
         db.close()
 
+def _backup_db_file_if_needed():
+    """Safely creates a .bak backup of the SQLite database file before applying migrations."""
+    if settings.DATABASE_URL.startswith("sqlite:///"):
+        rel_path = settings.DATABASE_URL.replace("sqlite:///", "")
+        if not os.path.isabs(rel_path):
+            base_dir = os.path.dirname(__file__)
+            db_path = os.path.normpath(os.path.join(base_dir, rel_path))
+        else:
+            db_path = rel_path
+        if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+            bak_path = f"{db_path}.bak"
+            try:
+                shutil.copy2(db_path, bak_path)
+            except Exception as e:
+                print(f"[DB BACKUP WARNING] Could not backup db file: {e}")
+
 def _sanitize_username(prefix: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9_.]", "_", prefix)
     if not re.match(r"^[a-zA-Z]", sanitized):
@@ -29,6 +47,7 @@ def _sanitize_username(prefix: str) -> str:
     return sanitized[:20]
 
 def init_db():
+    _backup_db_file_if_needed()
     import db_models  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
@@ -44,6 +63,8 @@ def init_db():
                 conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (username_lower)"))
             if "is_email_verified" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN is_email_verified BOOLEAN DEFAULT 0"))
+                # Mark existing users verified upon migration so nobody is locked out
+                conn.execute(text("UPDATE users SET is_email_verified = 1"))
             if "token_version" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 1"))
             if "permissions" not in columns:
@@ -60,6 +81,9 @@ def init_db():
                 conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_sent_at DATETIME"))
             if "welcome_email_error" not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN welcome_email_error VARCHAR(255)"))
+
+            # Ensure all administrators and super administrators are always verified
+            conn.execute(text("UPDATE users SET is_email_verified = 1 WHERE role IN ('admin', 'super_admin')"))
 
     if "uploaded_files" in inspector.get_table_names():
         uf_cols = {c["name"] for c in inspector.get_columns("uploaded_files")}

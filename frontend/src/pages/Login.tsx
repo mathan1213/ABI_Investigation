@@ -10,9 +10,10 @@ import {
   ArrowLeft,
   Loader2,
   KeyRound,
+  Send,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { loginUser, resetPassword } from '../lib/api';
+import { loginUser, resetPassword, resendVerification } from '../lib/api';
 
 export const Login: React.FC = () => {
   const { setAuthSession } = useAuth();
@@ -26,6 +27,11 @@ export const Login: React.FC = () => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isEmailUnverified, setIsEmailUnverified] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState('');
+  const [isResendingVerification, setIsResendingVerification] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -54,6 +60,9 @@ export const Login: React.FC = () => {
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
+    setIsEmailUnverified(false);
+    setResendSuccess(null);
+    setResendError(null);
 
     if (!identifier.trim() || !password) {
       setLoginError('Please enter both your email/username and password.');
@@ -72,9 +81,39 @@ export const Login: React.FC = () => {
         navigate(from, { replace: true });
       }
     } catch (err: any) {
-      setLoginError(err?.message || 'Incorrect email, username or password.');
+      if (
+        err?.code === 'email_not_verified' ||
+        (err?.message && err.message.toLowerCase().includes('verify your email'))
+      ) {
+        setIsEmailUnverified(true);
+        setUnverifiedEmail(identifier.trim());
+        setLoginError(err?.message || 'Please verify your email first. Check your inbox.');
+      } else {
+        setIsEmailUnverified(false);
+        setLoginError(err?.message || 'Incorrect email, username or password.');
+      }
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    const targetEmail = unverifiedEmail || identifier.trim();
+    if (!targetEmail || isResendingVerification) return;
+
+    setIsResendingVerification(true);
+    setResendSuccess(null);
+    setResendError(null);
+
+    try {
+      const res = await resendVerification(targetEmail);
+      setResendSuccess(
+        res.message || 'If this account exists and is not verified, a new email was sent'
+      );
+    } catch (err: any) {
+      setResendError(err?.message || 'Failed to resend verification email.');
+    } finally {
+      setIsResendingVerification(false);
     }
   };
 
@@ -137,9 +176,42 @@ export const Login: React.FC = () => {
             )}
 
             {loginError && (
-              <div className="mb-6 p-3.5 bg-red-900/30 border border-red-800/60 rounded-xl flex items-start gap-2.5 text-sm text-red-300">
-                <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-                <span>{loginError}</span>
+              <div className="mb-6 p-3.5 bg-red-900/30 border border-red-800/60 rounded-xl space-y-2.5 text-xs text-red-300">
+                <div className="flex items-start gap-2.5 text-sm">
+                  <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <span className="flex-1">{loginError}</span>
+                </div>
+                {isEmailUnverified && (
+                  <div className="pt-2 border-t border-red-800/40 space-y-2">
+                    <p className="text-xs text-slate-300">
+                      Didn't receive the email or has your link expired?
+                    </p>
+                    <button
+                      type="button"
+                      disabled={isResendingVerification}
+                      onClick={handleResendVerification}
+                      className="py-1.5 px-3 bg-red-950/80 hover:bg-red-900 border border-red-700/60 rounded-lg text-xs font-medium text-white flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isResendingVerification ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Sending verification email...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Resend verification email</span>
+                        </>
+                      )}
+                    </button>
+                    {resendSuccess && (
+                      <p className="text-xs text-emerald-300 font-medium">{resendSuccess}</p>
+                    )}
+                    {resendError && (
+                      <p className="text-xs text-red-400 font-medium">{resendError}</p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

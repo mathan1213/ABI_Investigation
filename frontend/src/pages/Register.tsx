@@ -13,7 +13,7 @@ import {
   RefreshCw,
   Send,
 } from 'lucide-react';
-import { checkUsername, registerUser, resendWelcomeEmail } from '../lib/api';
+import { checkUsername, registerUser, resendWelcomeEmail, resendVerification } from '../lib/api';
 import { RegisterResult } from '../lib/types';
 
 export const Register: React.FC = () => {
@@ -36,6 +36,27 @@ export const Register: React.FC = () => {
   const [isResending, setIsResending] = useState(false);
   const [resendStatus, setResendStatus] = useState<string | null>(null);
   const [resendError, setResendError] = useState<string | null>(null);
+  const [resendCountdown, setResendCountdown] = useState<number>(60);
+
+  // Countdown timer for resend email
+  useEffect(() => {
+    if (resendCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCountdown]);
+
+  const maskEmail = (rawEmail: string): string => {
+    const parts = rawEmail.split('@');
+    if (parts.length !== 2) return rawEmail;
+    const [userPart, domain] = parts;
+    const maskedUser =
+      userPart.length <= 2
+        ? userPart[0] + '***'
+        : userPart[0] + '***' + userPart[userPart.length - 1];
+    return `${maskedUser}@${domain}`;
+  };
 
   // Username validation state
   const [usernameStatus, setUsernameStatus] = useState<
@@ -172,6 +193,7 @@ export const Register: React.FC = () => {
       );
 
       setRegResult(result);
+      setResendCountdown(result.email_sent ? 60 : 0);
     } catch (err: any) {
       const msg = err?.message || '';
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network request failed')) {
@@ -185,51 +207,31 @@ export const Register: React.FC = () => {
   };
 
   // ---------------------------------------------------------------------------
-  // Handle Resend Confirmation Email
+  // Handle Resend Verification Email
   // ---------------------------------------------------------------------------
   const handleResendEmail = async () => {
-    if (!regResult?.email || isResending) return;
+    if (!regResult?.email || isResending || resendCountdown > 0) return;
     setIsResending(true);
     setResendStatus(null);
     setResendError(null);
 
     try {
-      const res = await resendWelcomeEmail(regResult.email);
-      if (res.email_sent) {
-        setResendStatus(res.message);
-        setRegResult({ ...regResult, email_sent: true });
-      } else {
-        setResendError(res.message || 'Unable to deliver welcome email. Please check server SMTP configuration.');
-      }
+      const res = await resendVerification(regResult.email);
+      setResendStatus(res.message || 'If this account exists and is not verified, a new email was sent.');
+      setResendCountdown(60);
+      setRegResult({ ...regResult, email_sent: true });
     } catch (err: any) {
-      setResendError(err?.message || 'Failed to resend welcome email.');
+      setResendError(err?.message || 'Failed to resend verification email.');
     } finally {
       setIsResending(false);
     }
   };
 
-  const handleProceedToLogin = () => {
-    if (!regResult) {
-      navigate('/login');
-      return;
-    }
-    const message = regResult.email_sent
-      ? 'Registration successful! A welcome email has been sent to your registered email address.'
-      : regResult.message || 'Registration successful! You can now sign in with your email and password.';
-
-    navigate('/login', {
-      state: {
-        successMessage: message,
-        registeredEmail: regResult.email,
-        emailSent: regResult.email_sent,
-      },
-    });
-  };
-
   // ---------------------------------------------------------------------------
-  // Dedicated Success View when Account is Created
+  // Dedicated "Check your email" View after Registration
   // ---------------------------------------------------------------------------
   if (regResult) {
+    const masked = maskEmail(regResult.email);
     return (
       <div className="min-h-[calc(100vh-140px)] flex items-center justify-center px-4 py-12">
         <div className="max-w-md w-full bg-[#111827] border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden text-center space-y-6">
@@ -237,20 +239,14 @@ export const Register: React.FC = () => {
 
           {/* Status Icon */}
           <div className="flex justify-center">
-            {regResult.email_sent ? (
-              <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg shadow-emerald-500/20">
-                <CheckCircle2 className="w-8 h-8" />
-              </div>
-            ) : (
-              <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-lg shadow-amber-500/20">
-                <Mail className="w-8 h-8" />
-              </div>
-            )}
+            <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-lg shadow-cyan-500/20">
+              <Mail className="w-8 h-8" />
+            </div>
           </div>
 
           <div>
             <h1 className="text-2xl font-bold text-white tracking-tight">
-              {regResult.email_sent ? 'Registration Successful!' : 'Account Created Successfully!'}
+              Check your email
             </h1>
             <p className="text-xs text-slate-400 mt-1">
               Account Breach Investigation Platform
@@ -261,93 +257,75 @@ export const Register: React.FC = () => {
           <div
             className={`p-4 rounded-xl text-left border text-xs leading-relaxed ${
               regResult.email_sent
-                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
+                ? 'bg-slate-900/60 border-slate-800 text-slate-200'
                 : 'bg-amber-950/40 border-amber-800/60 text-amber-300'
             }`}
           >
             <div className="flex items-start gap-2.5">
               {regResult.email_sent ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
               ) : (
                 <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               )}
               <div className="space-y-1">
-                <p className="font-semibold text-slate-100">
+                <p className="text-slate-200 text-sm leading-relaxed">
                   {regResult.email_sent
-                    ? 'Registration successful! A welcome email has been sent to your registered email address.'
-                    : 'Account created, but welcome email delivery was not completed.'}
+                    ? `We sent a verification link to ${masked}. Click it to activate your account.`
+                    : 'Account created. We could not send the email. Use Resend.'}
                 </p>
-                <p className="text-slate-300">
-                  {regResult.email_sent
-                    ? `We dispatched a confirmation email to ${regResult.email}. Check your inbox or spam folder.`
-                    : "The email server could not deliver the notification at this time. Don't worry—your account is active, securely saved in the database, and ready to use."}
+                <p className="text-slate-400 text-xs">
+                  Links are valid for 24 hours. Be sure to check your spam folder if you do not see it shortly.
                 </p>
               </div>
             </div>
           </div>
 
-          {/* User Details Preview */}
-          <div className="bg-[#0B0F19] border border-slate-800 rounded-xl p-3.5 text-left text-xs space-y-1.5">
-            <div className="flex justify-between items-center text-slate-400">
-              <span>Account Email:</span>
-              <span className="font-mono text-slate-200">{regResult.email}</span>
-            </div>
-            <div className="flex justify-between items-center text-slate-400">
-              <span>Email Delivery Status:</span>
-              <span
-                className={`font-semibold ${
-                  regResult.email_sent ? 'text-emerald-400' : 'text-amber-400'
-                }`}
-              >
-                {regResult.email_sent ? 'Delivered via SMTP' : 'Delivery Pending / Unconfigured'}
-              </span>
-            </div>
-          </div>
-
-          {/* Resend status banners */}
+          {/* Resend feedback */}
           {resendStatus && (
-            <div className="p-3 bg-emerald-900/30 border border-emerald-800/60 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
+            <div className="p-3 bg-emerald-900/30 border border-emerald-800/60 rounded-xl text-xs text-emerald-300 flex items-center gap-2 text-left">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{resendStatus}</span>
             </div>
           )}
           {resendError && (
-            <div className="p-3 bg-red-900/30 border border-red-800/60 rounded-xl text-xs text-red-300 flex items-center gap-2">
+            <div className="p-3 bg-red-900/30 border border-red-800/60 rounded-xl text-xs text-red-300 flex items-center gap-2 text-left">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
               <span>{resendError}</span>
             </div>
           )}
 
           {/* Action Buttons */}
-          <div className="space-y-2.5 pt-2">
+          <div className="space-y-3 pt-2">
             <button
-              onClick={handleProceedToLogin}
-              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-medium rounded-xl text-sm transition-all duration-150 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/25 cursor-pointer"
+              type="button"
+              onClick={handleResendEmail}
+              disabled={isResending || resendCountdown > 0}
+              className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-200 hover:text-white font-medium rounded-xl text-sm transition-colors flex items-center justify-center gap-2 border border-slate-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span>Proceed to Sign In</span>
-              <ArrowRight className="w-4 h-4" />
+              {isResending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Sending email...</span>
+                </>
+              ) : resendCountdown > 0 ? (
+                <>
+                  <RefreshCw className="w-4 h-4 text-slate-400" />
+                  <span>Resend email ({resendCountdown}s)</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 text-cyan-400" />
+                  <span>Resend email</span>
+                </>
+              )}
             </button>
 
-            {!regResult.email_sent && (
-              <button
-                type="button"
-                onClick={handleResendEmail}
-                disabled={isResending}
-                className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-300 hover:text-white font-medium rounded-xl text-xs transition-colors flex items-center justify-center gap-2 border border-slate-700 cursor-pointer disabled:opacity-50"
-              >
-                {isResending ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Attempting SMTP Delivery...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Retry Welcome Email Delivery</span>
-                  </>
-                )}
-              </button>
-            )}
+            <Link
+              to="/login"
+              className="block w-full py-2.5 px-4 text-center text-sm font-medium text-slate-400 hover:text-white transition-colors"
+            >
+              Back to Sign In
+            </Link>
           </div>
         </div>
       </div>

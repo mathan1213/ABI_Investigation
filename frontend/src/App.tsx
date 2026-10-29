@@ -14,6 +14,7 @@ import { NetworkCheck } from './pages/NetworkCheck';
 import { Report } from './pages/Report';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { VerifyEmail } from './pages/VerifyEmail';
 import { Privacy } from './pages/Privacy';
 import { AdminLogin } from './pages/AdminLogin';
 import { AdminDashboard } from './pages/AdminDashboard';
@@ -63,6 +64,7 @@ const AppContent: React.FC = () => {
           {/* Public Auth & Info Routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/privacy" element={<Privacy />} />
 
           {/* Protected User Routes */}

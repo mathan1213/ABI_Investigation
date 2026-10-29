@@ -407,3 +407,15 @@ export interface UserDetail {
   }[];
   activity: ActivityLogItem[];
 }
+
+export interface VerifyEmailResponse {
+  success: boolean;
+  message: string;
+  canResend?: boolean;
+}
+
+export interface ResendVerificationResponse {
+  success: boolean;
+  message: string;
+}
+

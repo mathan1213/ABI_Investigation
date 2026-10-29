@@ -100,7 +100,7 @@ async def test_username_uniqueness_case_insensitive_and_409(clean_db):
 @pytest.mark.asyncio
 async def test_welcome_email_and_instant_login(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
-    with patch("routers.auth.send_welcome_email") as mock_email:
+    with patch("routers.auth.send_verification_email") as mock_email:
         mock_email.return_value = (True, None)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             # 1. Register account
@@ -112,18 +112,31 @@ async def test_welcome_email_and_instant_login(clean_db):
                 "consent": True
             })
             assert r.status_code == 200
-            mock_email.assert_called_once_with(to_email="emma@test.com", user_name="Emma Watson")
+            mock_email.assert_called_once()
+            assert mock_email.call_args.kwargs["to_email"] == "emma@test.com"
+            assert mock_email.call_args.kwargs["user_name"] == "Emma Watson"
 
-            # 2. Account is directly active and email verified in DB
+            # 2. Account is registered unverified in DB
             db = SessionLocal()
             user_in_db = db.query(db_models.User).filter(db_models.User.email == "emma@test.com").first()
             assert user_in_db is not None
             assert user_in_db.is_active is True
-            assert user_in_db.is_email_verified is True
+            assert user_in_db.is_email_verified is False
             assert user_in_db.role == "user"
+
+            # Unverified account cannot login yet
+            unverified_login = await ac.post("/api/auth/login", json={
+                "identifier": "emma@test.com",
+                "password": "StrongPassword123!"
+            })
+            assert unverified_login.status_code == 403
+
+            # Verify email
+            user_in_db.is_email_verified = True
+            db.commit()
             db.close()
 
-            # 3. Direct login with email + password immediately succeeds without any OTP!
+            # 3. Direct login with email + password succeeds after email verification
             login_res = await ac.post("/api/auth/login", json={
                 "identifier": "emma@test.com",
                 "password": "StrongPassword123!"

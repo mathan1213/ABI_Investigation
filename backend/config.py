@@ -47,14 +47,18 @@ class Settings(BaseSettings):
     SMTP_USER: Optional[str] = None
     SMTP_APP_PASSWORD: Optional[str] = None
     SMTP_FROM: Optional[str] = None
+    APP_BASE_URL: str = "http://localhost:5173"
 
     @property
     def smtp_username(self) -> Optional[str]:
-        return self.SMTP_EMAIL or self.SMTP_USER
+        raw = self.SMTP_USER or self.SMTP_EMAIL
+        return raw.strip() if raw and raw.strip() else None
 
     @property
     def smtp_pass(self) -> Optional[str]:
-        return self.SMTP_PASSWORD or self.SMTP_APP_PASSWORD
+        raw = self.SMTP_PASSWORD or self.SMTP_APP_PASSWORD
+        # Gmail App Passwords often contain spaces that must be stripped
+        return raw.replace(" ", "").strip() if raw and raw.strip() else None
 
     # Security & Policy Settings
     AUTH_LOGIN_RATE_LIMIT: int = 10

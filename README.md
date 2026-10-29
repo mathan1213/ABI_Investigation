@@ -240,6 +240,9 @@ Configure the following in `backend/.env`:
 | `GITHUB_TOKEN` | *(empty / optional)* | *Optional, improves rate limits*: Increases GitHub API rate limits from 60 to 5,000 reqs/hr. |
 | `git` CLI | On system PATH | **Required for Repo Check**: Clones public Git repositories. Checked on-demand during repository scans. |
 
+### Email Verification Setup
+To deliver registration verification links, configure standard SMTP credentials in `backend/.env` (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `APP_BASE_URL`). Spaces in Google App Passwords are automatically stripped. In local development environments (`APP_ENV=development`), if SMTP credentials are unconfigured, verification links are printed directly to the backend terminal console for immediate testing without requiring an active mail relay.
+
 > [!NOTE]
 > No Telegram API keys (`TELEGRAM_API_ID` or `TELEGRAM_API_HASH`) are required. Telegram audits are performed purely through user-uploaded forensic log exports.
 

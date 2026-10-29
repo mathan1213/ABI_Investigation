@@ -29,6 +29,7 @@ class User(Base):
     scans = relationship("Scan", back_populates="user", cascade="all, delete-orphan")
     reports = relationship("Report", back_populates="user", cascade="all, delete-orphan")
     uploaded_files = relationship("UploadedFile", back_populates="user", cascade="all, delete-orphan")
+    email_verifications = relationship("EmailVerification", back_populates="user", cascade="all, delete-orphan")
 
 class Scan(Base):
     __tablename__ = "scans"
@@ -93,3 +94,15 @@ class AuditLog(Base):
     before_state = Column(Text, nullable=True)
     after_state = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False, index=True)
+
+class EmailVerification(Base):
+    __tablename__ = "email_verifications"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used = Column(Boolean, default=False, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc), nullable=False)
+
+    user = relationship("User", back_populates="email_verifications")

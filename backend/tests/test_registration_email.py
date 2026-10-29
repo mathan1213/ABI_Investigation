@@ -65,10 +65,10 @@ async def test_full_registration_and_email_delivery(clean_db):
     Scenario 1, 2, 3:
     1. A new user registers with a valid name, username, email, password, and confirm password.
     2. The user record is saved to SQLite with bcrypt password hash.
-    3. Welcome email delivery is triggered to the user's actual email address.
+    3. Verification email delivery is triggered to the user's actual email address.
     """
     app.dependency_overrides.pop(get_current_user, None)
-    with patch("routers.auth.send_welcome_email") as mock_email:
+    with patch("routers.auth.send_verification_email") as mock_email:
         mock_email.return_value = (True, None)
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -84,10 +84,12 @@ async def test_full_registration_and_email_delivery(clean_db):
             data = res.json()
             assert data["success"] is True
             assert data["email_sent"] is True
-            assert "welcome email has been sent" in data["message"].lower()
+            assert "verification link has been sent" in data["message"].lower()
 
             # Verify email was sent to actual registered email
-            mock_email.assert_called_once_with(to_email="sarah@cyberdyne.org", user_name="Sarah Connor")
+            mock_email.assert_called_once()
+            assert mock_email.call_args.kwargs["to_email"] == "sarah@cyberdyne.org"
+            assert mock_email.call_args.kwargs["user_name"] == "Sarah Connor"
 
             # Verify saved in SQLite database
             db = SessionLocal()
@@ -98,8 +100,6 @@ async def test_full_registration_and_email_delivery(clean_db):
             assert user.username_lower == "sarah_connor"
             assert user.password_hash != "Password2026!Secure"
             assert bcrypt.checkpw("Password2026!Secure".encode("utf-8"), user.password_hash.encode("utf-8"))
-            assert user.welcome_email_sent is True
-            assert user.welcome_email_sent_at is not None
             db.close()
 
 
@@ -191,7 +191,7 @@ async def test_smtp_failure_handled_gracefully(clean_db):
     but email_sent is False and the system does NOT falsely tell the user the email was sent.
     """
     app.dependency_overrides.pop(get_current_user, None)
-    with patch("routers.auth.send_welcome_email") as mock_email:
+    with patch("routers.auth.send_verification_email") as mock_email:
         mock_email.return_value = (False, "SMTP authentication failed")
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -209,14 +209,13 @@ async def test_smtp_failure_handled_gracefully(clean_db):
             assert data["email_sent"] is False
             # Does NOT falsely claim email was sent
             assert "has been sent" not in data["message"].lower()
-            assert "couldn't send" in data["message"].lower() or "unavailable" in data["message"].lower()
+            assert "could not send the email" in data["message"].lower() or "resend" in data["message"].lower()
 
-            # Verify in DB: welcome_email_sent is False and error is logged
+            # Verify in DB: user exists and is not verified
             db = SessionLocal()
             user = db.query(db_models.User).filter(db_models.User.email == "fallback@test.com").first()
             assert user is not None
-            assert user.welcome_email_sent is False
-            assert user.welcome_email_error is not None
+            assert user.is_email_verified is False
             db.close()
 
 
@@ -228,9 +227,7 @@ async def test_resend_welcome_email_and_duplicate_prevention(clean_db):
     and prevents sending duplicate welcome emails once sent.
     """
     app.dependency_overrides.pop(get_current_user, None)
-    # First create user with failed email delivery
-    with patch("routers.auth.send_welcome_email") as mock_email:
-        mock_email.return_value = (False, "Connection timeout")
+    with patch("routers.auth.send_verification_email", return_value=(True, None)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             res_reg = await ac.post("/api/auth/register", json={
                 "name": "Retry User",
@@ -241,38 +238,36 @@ async def test_resend_welcome_email_and_duplicate_prevention(clean_db):
                 "consent": True
             })
             assert res_reg.status_code == 200
-            assert res_reg.json()["email_sent"] is False
 
-            # Now retry with successful SMTP
-            mock_email.return_value = (True, None)
-            res_retry = await ac.post("/api/auth/resend-welcome-email", json={
-                "email": "retry@test.com"
-            })
-            assert res_retry.status_code == 200
-            assert res_retry.json()["success"] is True
-            assert res_retry.json()["email_sent"] is True
+            # Test resending welcome email when not yet marked sent
+            with patch("routers.auth.send_welcome_email", return_value=(True, None)):
+                res_retry = await ac.post("/api/auth/resend-welcome-email", json={
+                    "email": "retry@test.com"
+                })
+                assert res_retry.status_code == 200
+                assert res_retry.json()["success"] is True
+                assert res_retry.json()["email_sent"] is True
 
-            # In DB: welcome_email_sent is now True
-            db = SessionLocal()
-            user = db.query(db_models.User).filter(db_models.User.email == "retry@test.com").first()
-            assert user.welcome_email_sent is True
-            db.close()
+                # In DB: welcome_email_sent is now True
+                db = SessionLocal()
+                user = db.query(db_models.User).filter(db_models.User.email == "retry@test.com").first()
+                assert user.welcome_email_sent is True
+                db.close()
 
-            # Try to send a duplicate welcome email -> must prevent duplicate sending!
-            res_duplicate = await ac.post("/api/auth/resend-welcome-email", json={
-                "email": "retry@test.com"
-            })
-            assert res_duplicate.status_code == 200
-            assert res_duplicate.json()["already_sent"] is True
-            assert "already been sent" in res_duplicate.json()["message"].lower()
+                # Try to send a duplicate welcome email -> must prevent duplicate sending!
+                res_duplicate = await ac.post("/api/auth/resend-welcome-email", json={
+                    "email": "retry@test.com"
+                })
+                assert res_duplicate.status_code == 200
+                assert res_duplicate.json()["already_sent"] is True
+                assert "already been sent" in res_duplicate.json()["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_login_after_registration(clean_db):
-    """Scenario 7: The user can log in after registration using username/email and password."""
+    """Scenario 7: The user can log in after registration and email verification using username/email and password."""
     app.dependency_overrides.pop(get_current_user, None)
-    with patch("routers.auth.send_welcome_email") as mock_email:
-        mock_email.return_value = (True, None)
+    with patch("routers.auth.send_verification_email", return_value=(True, None)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             # 1. Register
             r_reg = await ac.post("/api/auth/register", json={
@@ -285,7 +280,15 @@ async def test_login_after_registration(clean_db):
             })
             assert r_reg.status_code == 200
 
-            # 2. Login by email
+            # 2. Verify account
+            db = SessionLocal()
+            user = db.query(db_models.User).filter(db_models.User.email == "tester@test.com").first()
+            assert user is not None
+            user.is_email_verified = True
+            db.commit()
+            db.close()
+
+            # 3. Login by email
             r_login_email = await ac.post("/api/auth/login", json={
                 "identifier": "tester@test.com",
                 "password": "Password2026!Secure"
@@ -294,7 +297,7 @@ async def test_login_after_registration(clean_db):
             assert "token" in r_login_email.json()
             assert r_login_email.json()["user"]["email"] == "tester@test.com"
 
-            # 3. Login by username
+            # 4. Login by username
             r_login_user = await ac.post("/api/auth/login", json={
                 "identifier": "logintester",
                 "password": "Password2026!Secure"

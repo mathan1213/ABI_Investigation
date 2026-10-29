@@ -1,6 +1,13 @@
 import datetime
+import hashlib
+import hmac
+import json
+import secrets
+import time
+from collections import defaultdict
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -28,7 +35,7 @@ from modules.auth_module import (
     ALL_PERMISSIONS,
     seed_admin_if_needed,
 )
-from modules.email_service import send_welcome_email
+from modules.email_service import send_welcome_email, send_verification_email
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -45,6 +52,12 @@ class RegisterRequest(BaseModel):
     confirm_password: Optional[str] = None
     confirmPassword: Optional[str] = None
     consent: bool = False
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+class ResendVerificationRequest(BaseModel):
+    email: str
 
 class ResendWelcomeEmailRequest(BaseModel):
     email: str
@@ -112,6 +125,80 @@ def to_user_response(user: db_models.User) -> UserResponse:
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting & token helpers for email verification
+# ---------------------------------------------------------------------------
+
+_resend_cooldowns: dict[str, float] = {}  # email -> timestamp of last send
+_resend_hourly: dict[str, list[float]] = defaultdict(list)  # email -> list of timestamps
+_resend_ip_limits: dict[str, list[float]] = defaultdict(list)  # ip -> list of timestamps
+
+
+def check_resend_rate_limit(email: str, client_ip: str):
+    now = time.time()
+    # IP limit: max 10 per minute
+    ip_records = [t for t in _resend_ip_limits[client_ip] if now - t < 60]
+    _resend_ip_limits[client_ip] = ip_records
+    if len(ip_records) >= 10:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many verification requests from this IP address. Please wait a minute.",
+        )
+
+    # 1 per 60s per account
+    last_sent = _resend_cooldowns.get(email, 0)
+    if now - last_sent < 60:
+        remaining = int(60 - (now - last_sent))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Please wait {remaining} seconds before requesting another verification email.",
+        )
+
+    # 5 per hour per account
+    hour_records = [t for t in _resend_hourly[email] if now - t < 3600]
+    _resend_hourly[email] = hour_records
+    if len(hour_records) >= 5:
+        raise HTTPException(
+            status_code=429,
+            detail="Maximum verification email limit reached for this hour (5 emails). Please check your spam folder or try again later.",
+        )
+
+
+def record_resend_attempt(email: str, client_ip: str):
+    now = time.time()
+    _resend_cooldowns[email] = now
+    _resend_hourly[email].append(now)
+    _resend_ip_limits[client_ip].append(now)
+
+
+def generate_verification_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_verification_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def cleanup_stale_unverified_accounts(db: Session) -> int:
+    """Deletes unverified accounts older than 7 days, freeing username and email."""
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+    stale_users = (
+        db.query(db_models.User)
+        .filter(
+            db_models.User.is_email_verified.is_(False),
+            db_models.User.created_at < cutoff,
+        )
+        .all()
+    )
+    count = 0
+    for u in stale_users:
+        db.delete(u)
+        count += 1
+    if count > 0:
+        db.commit()
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +290,12 @@ def register(
     if existing_u:
         raise HTTPException(status_code=409, detail="This username is already taken, try another.")
 
+    # Cleanup stale unverified accounts (>7 days old)
+    try:
+        cleanup_stale_unverified_accounts(db)
+    except Exception:
+        pass
+
     try:
         is_admin_candidate = email in (
             (settings.ADMIN_EMAIL or "").strip().lower(),
@@ -220,7 +313,7 @@ def register(
             password_hash=hash_password(password),
             role=assigned_role,
             is_active=True,
-            is_email_verified=True,
+            is_email_verified=False,
             token_version=1,
             permissions=assigned_perms,
             needs_username_change=False,
@@ -234,19 +327,35 @@ def register(
 
     log_activity(db, "register", user_id=user.id, detail=f"Registered account for {email}")
 
-    # Send Welcome Email notification via Gmail SMTP
-    email_sent, email_err = send_welcome_email(to_email=email, user_name=name)
+    # Generate verification token and link
+    token = generate_verification_token()
+    token_hash = hash_verification_token(token)
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)
+
+    verification = db_models.EmailVerification(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+        used=False,
+    )
+    db.add(verification)
+    db.commit()
+
+    base_url = (settings.APP_BASE_URL or "http://localhost:5173").rstrip("/")
+    verification_link = f"{base_url}/verify-email?token={token}"
+
+    email_sent, email_err = send_verification_email(
+        to_email=email,
+        user_name=name,
+        verification_link=verification_link,
+    )
+
     if email_sent:
-        user.welcome_email_sent = True
-        user.welcome_email_sent_at = datetime.datetime.now(datetime.timezone.utc)
-        user.welcome_email_error = None
-        db.commit()
-        response_msg = "Registration successful! A welcome email has been sent to your registered email address."
+        client_ip = request.client.host if request and request.client else "127.0.0.1"
+        record_resend_attempt(email, client_ip)
+        response_msg = "Registration successful! A verification link has been sent to your email address."
     else:
-        user.welcome_email_sent = False
-        user.welcome_email_error = (email_err or "Delivery failed")[:255]
-        db.commit()
-        response_msg = "Registration successful! However, we couldn't send the welcome email at this time (email service unavailable). You can still log in with your credentials."
+        response_msg = "Account created. We could not send the email. Use Resend."
 
     return {
         "success": True,
@@ -255,6 +364,158 @@ def register(
         "email": email,
         "userId": user.id,
     }
+
+
+@router.post("/verify-email")
+def verify_email(
+    req: VerifyEmailRequest,
+    db: Session = Depends(get_db),
+):
+    token = req.token.strip()
+    if not token:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "Verification token is required.",
+                "canResend": True,
+            },
+        )
+
+    token_hash = hash_verification_token(token)
+    verification = (
+        db.query(db_models.EmailVerification)
+        .filter(db_models.EmailVerification.token_hash == token_hash)
+        .first()
+    )
+
+    if not verification:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "This verification link is invalid or has expired.",
+                "canResend": True,
+            },
+        )
+
+    # Constant-time comparison
+    if not hmac.compare_digest(verification.token_hash, token_hash):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "This verification link is invalid or has expired.",
+                "canResend": True,
+            },
+        )
+
+    if verification.used:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "This verification link has already been used. Please log in or request a new link.",
+                "canResend": True,
+            },
+        )
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    exp = verification.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=datetime.timezone.utc)
+
+    if exp < now:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "This verification link has expired (links are valid for 24 hours). Please request a new verification email.",
+                "canResend": True,
+            },
+        )
+
+    user = verification.user or db.query(db_models.User).filter(db_models.User.id == verification.user_id).first()
+    if not user:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "message": "User account associated with this token could not be found.",
+                "canResend": True,
+            },
+        )
+
+    user.is_email_verified = True
+    verification.used = True
+    db.commit()
+
+    log_activity(db, "verify_email", user_id=user.id, detail=f"User {user.email} successfully verified email")
+
+    return {
+        "success": True,
+        "message": "Email verified. You can now log in.",
+    }
+
+
+@router.post("/resend-verification")
+def resend_verification(
+    req: ResendVerificationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    email = req.email.strip().lower()
+    client_ip = request.client.host if request and request.client else "127.0.0.1"
+
+    # Enforce rate limits (IP and account)
+    check_resend_rate_limit(email, client_ip)
+
+    generic_success = {
+        "success": True,
+        "message": "If this account exists and is not verified, a new email was sent",
+    }
+
+    if not validate_email_format(email):
+        return generic_success
+
+    user = db.query(db_models.User).filter(db_models.User.email == email).first()
+    # Never send to verified accounts, and never leak account existence
+    if not user or user.is_email_verified:
+        record_resend_attempt(email, client_ip)
+        return generic_success
+
+    record_resend_attempt(email, client_ip)
+
+    # Invalidate older unused tokens for that user
+    db.query(db_models.EmailVerification).filter(
+        db_models.EmailVerification.user_id == user.id,
+        db_models.EmailVerification.used.is_(False),
+    ).update({"used": True})
+
+    # Generate new token
+    token = generate_verification_token()
+    token_hash = hash_verification_token(token)
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)
+
+    verification = db_models.EmailVerification(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=expires_at,
+        used=False,
+    )
+    db.add(verification)
+    db.commit()
+
+    base_url = (settings.APP_BASE_URL or "http://localhost:5173").rstrip("/")
+    verification_link = f"{base_url}/verify-email?token={token}"
+
+    send_verification_email(
+        to_email=user.email,
+        user_name=user.name,
+        verification_link=verification_link,
+    )
+
+    return generic_success
 
 
 @router.post("/resend-welcome-email")
@@ -373,6 +634,16 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=403,
             detail="Your account has been deactivated. Please contact an administrator.",
+        )
+
+    if not user.is_email_verified:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "email_not_verified",
+                "message": "Please verify your email first. Check your inbox.",
+                "detail": "Please verify your email first. Check your inbox.",
+            },
         )
 
     reset_failed_login(db, user)

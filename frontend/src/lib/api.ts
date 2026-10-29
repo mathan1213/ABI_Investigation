@@ -18,6 +18,8 @@ import {
   ActivityLogItem,
   UploadedFileItem,
   AdminReportItem,
+  VerifyEmailResponse,
+  ResendVerificationResponse,
 } from './types';
 
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -47,8 +49,11 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
     }
     try {
       const errorData = await res.json();
-      if (errorData?.detail) {
-        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
+      if (errorData?.detail || errorData?.message) {
+        const msg = typeof errorData.detail === 'string' ? errorData.detail : (errorData.message || defaultErrorMsg);
+        const err: any = new Error(msg);
+        if (errorData.code) err.code = errorData.code;
+        throw err;
       }
     } catch (e: any) {
       if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
@@ -58,9 +63,13 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
   if (res.status === 403) {
     try {
       const errorData = await res.json();
-      if (errorData?.detail) {
-        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
-      }
+      const msg = typeof errorData.detail === 'string'
+        ? errorData.detail
+        : (typeof errorData.message === 'string' ? errorData.message : defaultErrorMsg);
+      const err: any = new Error(msg);
+      if (errorData.code) err.code = errorData.code;
+      if (errorData.canResend !== undefined) err.canResend = errorData.canResend;
+      throw err;
     } catch (e: any) {
       if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
     }
@@ -69,9 +78,12 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
   if (res.status === 429) {
     try {
       const errorData = await res.json();
-      if (errorData?.detail) {
-        throw new Error(typeof errorData.detail === 'string' ? errorData.detail : defaultErrorMsg);
-      }
+      const msg = typeof errorData.detail === 'string'
+        ? errorData.detail
+        : (typeof errorData.message === 'string' ? errorData.message : defaultErrorMsg);
+      const err: any = new Error(msg);
+      if (errorData.code) err.code = errorData.code;
+      throw err;
     } catch (e: any) {
       if (e?.message && e.message !== 'Unexpected end of JSON input') throw e;
     }
@@ -80,13 +92,18 @@ async function handleResponse<T>(res: Response, defaultErrorMsg: string): Promis
   if (!res.ok) {
     try {
       const errorData = await res.json();
-      if (errorData?.detail) {
-        if (typeof errorData.detail === 'string') {
-          throw new Error(errorData.detail);
-        } else if (Array.isArray(errorData.detail)) {
-          throw new Error(errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', '));
-        }
+      let msg = defaultErrorMsg;
+      if (typeof errorData?.detail === 'string') {
+        msg = errorData.detail;
+      } else if (typeof errorData?.message === 'string') {
+        msg = errorData.message;
+      } else if (Array.isArray(errorData?.detail)) {
+        msg = errorData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
       }
+      const err: any = new Error(msg);
+      if (errorData?.code) err.code = errorData.code;
+      if (errorData?.canResend !== undefined) err.canResend = errorData.canResend;
+      throw err;
     } catch (e: any) {
       if (e?.message && e.message !== 'Unexpected end of JSON input') {
         throw e;
@@ -139,6 +156,24 @@ export async function resendWelcomeEmail(
     body: JSON.stringify({ email }),
   });
   return await handleResponse<ResendWelcomeEmailResult>(res, "Failed to resend welcome email.");
+}
+
+export async function verifyEmail(token: string): Promise<VerifyEmailResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  return await handleResponse<VerifyEmailResponse>(res, "Failed to verify email.");
+}
+
+export async function resendVerification(email: string): Promise<ResendVerificationResponse> {
+  const res = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  return await handleResponse<ResendVerificationResponse>(res, "Failed to resend verification email.");
 }
 
 export async function loginUser(identifier: string, password: string): Promise<AuthResponse> {

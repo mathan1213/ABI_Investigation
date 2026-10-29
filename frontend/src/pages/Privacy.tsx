@@ -36,7 +36,7 @@ export const Privacy: React.FC = () => {
             To provide persistent investigative dossiers and user account management, our system stores:
           </p>
           <ul className="list-disc list-inside space-y-1.5 text-sm text-slate-300 pl-2">
-            <li><strong className="text-white">Account Details:</strong> Your name, email address, password hash (securely hashed with bcrypt; we never see or store plain passwords), and login timestamps.</li>
+            <li><strong className="text-white">Account Details:</strong> Your name, verified email address, password hash (securely hashed with bcrypt; we never see or store plain passwords), and login timestamps.</li>
             <li><strong className="text-white">Scan Summaries:</strong> Metadata of scans you initiate (module name, target label, overall risk score, risk level, and sanitized finding summaries).</li>
             <li><strong className="text-white">Generated Reports:</strong> Composite risk scores, recommended actions, and executive dossiers created by the risk engine.</li>
             <li><strong className="text-white">Activity Logs:</strong> Timestamps of system actions (e.g. login, log upload, repo scan, report generation) for security auditing.</li>

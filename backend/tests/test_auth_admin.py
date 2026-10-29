@@ -29,7 +29,7 @@ def clean_db():
 @pytest.mark.asyncio
 async def test_auth_registration_and_password_hashing(clean_db):
     app.dependency_overrides.pop(get_current_user, None)
-    with patch("routers.auth.send_welcome_email") as mock_email:
+    with patch("routers.auth.send_verification_email") as mock_email:
         mock_email.return_value = (True, None)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             # 1. Invalid email
@@ -52,7 +52,7 @@ async def test_auth_registration_and_password_hashing(clean_db):
             })
             assert res.status_code == 400
 
-            # 3. Valid registration (creates active user directly, sends welcome email)
+            # 3. Valid registration (creates user, sends verification email)
             res = await ac.post("/api/auth/register", json={
                 "name": "Alice Smith",
                 "username": "Alice_Smith",
@@ -66,8 +66,10 @@ async def test_auth_registration_and_password_hashing(clean_db):
             assert "registration successful" in data["message"].lower() or "created" in data["message"].lower()
             assert data["email_sent"] is True
 
-            # Welcome email triggered
-            mock_email.assert_called_once_with(to_email="alice@test.com", user_name="Alice Smith")
+            # Verification email triggered
+            mock_email.assert_called_once()
+            assert mock_email.call_args.kwargs["to_email"] == "alice@test.com"
+            assert mock_email.call_args.kwargs["user_name"] == "Alice Smith"
 
             # 4. Verify password hash in DB is NOT plain text and is valid bcrypt
             db = SessionLocal()
@@ -78,7 +80,7 @@ async def test_auth_registration_and_password_hashing(clean_db):
             assert user_in_db.username == "Alice_Smith"
             assert user_in_db.username_lower == "alice_smith"
             assert user_in_db.is_active is True
-            assert user_in_db.is_email_verified is True
+            assert user_in_db.is_email_verified is False
             db.close()
 
             # 5. Duplicate email rejected with 409
