@@ -9,6 +9,7 @@ interface VerdictItem {
 
 interface VerdictCardProps {
   verdict: 'Safe' | 'Suspicious' | 'Dangerous';
+  displayVerdict?: string;
   title?: string;
   explanation: string;
   score?: number;
@@ -19,6 +20,7 @@ interface VerdictCardProps {
 
 export const VerdictCard: React.FC<VerdictCardProps> = ({
   verdict,
+  displayVerdict,
   title,
   explanation,
   score,
@@ -62,7 +64,7 @@ export const VerdictCard: React.FC<VerdictCardProps> = ({
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${config.badge}`}>
-                {verdict}
+                {displayVerdict || verdict}
               </span>
               {title && <h3 className="text-lg font-bold text-white">{title}</h3>}
             </div>

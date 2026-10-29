@@ -85,12 +85,16 @@ async def test_file_upload_and_isolation(isolation_users):
 
     dummy_result = TelegramScanResult(
         phone="+1234567890",
+        account_name="Test User",
         risk_score=15,
         risk_level="low",
         summary="Clean export",
+        how_it_happened="Routine analysis",
         sessions=[],
         findings=[],
         alerts=[],
+        action_checklist=[],
+        timestamp="2026-10-29T12:00:00Z",
     )
 
     with patch("routers.telegram.parse_and_analyze_telegram_export", new_callable=AsyncMock) as mock_parser:

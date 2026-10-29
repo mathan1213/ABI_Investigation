@@ -324,19 +324,15 @@ export const NetworkCheck: React.FC = () => {
                 Quick presets:
               </span>
               <button
-                onClick={() => {
-                  setIpInput('185.220.101.5');
-                  handleCheckIp('185.220.101.5');
-                }}
+                type="button"
+                onClick={() => setIpInput('185.220.101.5')}
                 className="font-mono text-[11px] bg-red-500/10 hover:bg-red-500/20 text-red-300 px-2.5 py-1 rounded-lg border border-red-500/30 transition-colors"
               >
-                185.220.101.5 (Known Tor node)
+                185.220.101.5 (example Tor IP)
               </button>
               <button
-                onClick={() => {
-                  setIpInput('8.8.8.8');
-                  handleCheckIp('8.8.8.8');
-                }}
+                type="button"
+                onClick={() => setIpInput('8.8.8.8')}
                 className="font-mono text-[11px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-colors"
               >
                 8.8.8.8 (Google Safe DNS)
@@ -358,12 +354,13 @@ export const NetworkCheck: React.FC = () => {
             <div className="space-y-6">
               <VerdictCard
                 verdict={networkScan.ipResult.verdict}
+                displayVerdict={networkScan.ipResult.verdict === 'Safe' ? 'No threat signals found' : undefined}
                 title={`IP Address ${networkScan.ipResult.ip}`}
                 explanation={networkScan.ipResult.explanation}
                 score={networkScan.ipResult.abuseScore}
-                scoreLabel="Abuse Confidence Score"
+                scoreLabel={networkScan.ipResult.abuseDbChecked ? 'Abuse Confidence Score' : 'Estimated risk score'}
                 items={[
-                  { label: 'Country & Location', value: `${networkScan.ipResult.country} (${networkScan.ipResult.city})` },
+                  { label: 'Approximate location', value: `${networkScan.ipResult.city}, ${networkScan.ipResult.country}` },
                   { label: 'Internet Service Provider', value: networkScan.ipResult.isp },
                   { label: 'Autonomous System (ASN)', value: networkScan.ipResult.asn },
                   {
@@ -373,18 +370,30 @@ export const NetworkCheck: React.FC = () => {
                   },
                   {
                     label: 'Tor Anonymizer Node',
-                    value: networkScan.ipResult.isTor ? 'Confirmed Tor Exit' : 'No Tor Detected',
+                    value: networkScan.ipResult.torStatus === 'unknown'
+                      ? 'Tor status: unknown'
+                      : networkScan.ipResult.isTor
+                      ? 'Confirmed Tor Exit'
+                      : 'No Tor Detected',
                     isDanger: networkScan.ipResult.isTor,
                   },
                   {
-                    label: 'Hosting / Cloud Datacenter',
-                    value: networkScan.ipResult.isHosting ? 'Datacenter / Cloud Server' : 'Residential / Broadband',
+                    label: 'Network type',
+                    value: networkScan.ipResult.isHosting
+                      ? 'Datacenter or cloud'
+                      : 'Internet provider network (home, business or institution)',
                     isDanger: false,
                   },
                   {
                     label: 'Recommendation',
-                    value: networkScan.ipResult.abuseScore > 50 ? 'Block Immediately' : 'Allow Traffic',
-                    isDanger: networkScan.ipResult.abuseScore > 50,
+                    value: networkScan.ipResult.recommendation || (
+                      networkScan.ipResult.isTor || networkScan.ipResult.abuseScore >= 75
+                        ? 'Block or investigate'
+                        : networkScan.ipResult.abuseScore >= 40
+                        ? 'Review'
+                        : 'No threat signals found in the checks that ran. This is not a guarantee. Verify unexpected activity manually.'
+                    ),
+                    isDanger: networkScan.ipResult.isTor || networkScan.ipResult.abuseScore >= 75,
                   },
                 ]}
               />
@@ -393,14 +402,18 @@ export const NetworkCheck: React.FC = () => {
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
                     <span>Tor Exit Node</span>
-                    {networkScan.ipResult.isTor ? (
+                    {networkScan.ipResult.torStatus === 'unknown' ? (
+                      <span className="text-slate-400 font-bold">UNKNOWN</span>
+                    ) : networkScan.ipResult.isTor ? (
                       <span className="text-red-400 font-bold">YES</span>
                     ) : (
                       <span className="text-emerald-400 font-bold">NO</span>
                     )}
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Tor nodes allow individuals to completely hide their real location. Attackers frequently use them for brute-force attacks.
+                    {networkScan.ipResult.torStatus === 'unknown'
+                      ? 'Tor status: unknown because registry records could not be verified or are outdated.'
+                      : 'Tor nodes allow individuals to completely hide their real location. Attackers frequently use them for brute-force attacks.'}
                   </p>
                 </div>
 
@@ -414,35 +427,37 @@ export const NetworkCheck: React.FC = () => {
                     )}
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Anonymizing relay or commercial VPN disguising the originating device.
+                    Anonymizing relay or commercial VPN disguising originating device.
                   </p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
-                    <span>Hosting / Cloud</span>
+                    <span>Network type</span>
                     {networkScan.ipResult.isHosting ? (
-                      <span className="text-cyan-400 font-bold">DATACENTER</span>
+                      <span className="text-cyan-400 font-bold">DATACENTER OR CLOUD</span>
                     ) : (
-                      <span className="text-emerald-400 font-bold">RESIDENTIAL</span>
+                      <span className="text-emerald-400 font-bold">PROVIDER NETWORK</span>
                     )}
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
                     {networkScan.ipResult.isHosting
-                      ? 'Cloud datacenter server rather than a private residential broadband connection.'
-                      : 'Standard residential or consumer broadband internet connection.'}
+                      ? 'Network type: Datacenter or cloud.'
+                      : 'Network type: Internet provider network (home, business or institution).'}
                   </p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
-                    <span>Abuse Score</span>
+                    <span>{networkScan.ipResult.abuseDbChecked ? 'Abuse Score' : 'Estimated Risk'}</span>
                     <span className="text-cyan-400 font-bold font-mono">
                       {networkScan.ipResult.abuseScore} / 100
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    Calculated confidence rating based on threat intelligence reports and server signals.
+                    {networkScan.ipResult.abuseDbChecked
+                      ? `Abuse reports: ${networkScan.ipResult.totalReports ?? 0} in the last 90 days.`
+                      : 'Estimated risk score. Abuse report databases were not checked.'}
                   </p>
                 </div>
               </div>
@@ -496,19 +511,15 @@ export const NetworkCheck: React.FC = () => {
                 Quick presets:
               </span>
               <button
-                onClick={() => {
-                  setLinkInput('https://security-verify-telegram.cc/login');
-                  handleCheckLink('https://security-verify-telegram.cc/login');
-                }}
+                type="button"
+                onClick={() => setLinkInput('https://security-verify-telegram.cc/login')}
                 className="font-mono text-[11px] bg-red-500/10 hover:bg-red-500/20 text-red-300 px-2.5 py-1 rounded-lg border border-red-500/30 transition-colors"
               >
-                Fake Telegram Phishing Scam
+                Example phishing-style link
               </button>
               <button
-                onClick={() => {
-                  setLinkInput('https://github.com/trending');
-                  handleCheckLink('https://github.com/trending');
-                }}
+                type="button"
+                onClick={() => setLinkInput('https://github.com/trending')}
                 className="font-mono text-[11px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-colors"
               >
                 Genuine GitHub Link
@@ -528,23 +539,62 @@ export const NetworkCheck: React.FC = () => {
           {/* Result State */}
           {!isScanning && networkScan.linkResult && (
             <div className="space-y-6">
+              {/* Inconclusive / Blocked Notice */}
+              {networkScan.linkResult.isInconclusive && (
+                <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs flex items-center gap-3">
+                  <AlertTriangle size={18} className="shrink-0 text-yellow-400" />
+                  <div>
+                    <span className="font-bold block">Inconclusive: the site blocked automated checks</span>
+                    <span className="text-slate-300">
+                      The destination server actively restricted access with an automated defense or challenge page. Results may not reflect the real site.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* CDN Detection Notice */}
+              {networkScan.linkResult.cdnDetected && (
+                <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs flex items-center gap-3">
+                  <Server size={18} className="shrink-0 text-cyan-400" />
+                  <div>
+                    <span className="font-bold block">Site behind {networkScan.linkResult.cdnDetected}</span>
+                    <span className="text-slate-300">
+                      {networkScan.linkResult.cdnNote || `This site is behind ${networkScan.linkResult.cdnDetected}. The SSL certificate and headers shown belong to the CDN, not necessarily the origin server.`}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <VerdictCard
                 verdict={networkScan.linkResult.verdict}
                 title="Link Security Assessment"
                 explanation={networkScan.linkResult.explanation}
                 score={networkScan.linkResult.reputationScore}
-                scoreLabel="Trust Score"
+                scoreLabel="Technical checks score"
                 items={[
-                  { label: 'Domain Age', value: networkScan.linkResult.domainAge, isDanger: networkScan.linkResult.domainAge.includes('days') },
+                  {
+                    label: 'Domain Age',
+                    value: networkScan.linkResult.domainAge,
+                    isDanger: networkScan.linkResult.domainAgeDays !== null && networkScan.linkResult.domainAgeDays !== undefined && networkScan.linkResult.domainAgeDays < 30,
+                  },
                   { label: 'SSL Certificate', value: networkScan.linkResult.sslValid ? 'Active SSL' : 'Invalid / Insecure' },
                   { label: 'SSL Issuer', value: networkScan.linkResult.sslIssuer || 'Unknown' },
                   {
-                    label: 'Redirect Hops',
-                    value: `${networkScan.linkResult.redirectChain.length} Re-routes`,
-                    isDanger: networkScan.linkResult.redirectChain.length > 1,
+                    label: 'Redirects',
+                    value: `${networkScan.linkResult.redirectCount ?? 0} redirects`,
+                    isDanger: (networkScan.linkResult.redirectCount ?? 0) > 1,
                   },
                 ]}
               />
+
+              <div className="text-right -mt-4 pr-2">
+                <span className="text-[11px] text-slate-400 italic">
+                  * Technical checks score is based on domain age, SSL certificate, DNS, and redirects.{' '}
+                  {networkScan.linkResult.reputationChecked
+                    ? 'Threat reputation databases checked.'
+                    : 'Reputation databases were not checked.'}
+                </span>
+              </div>
 
               {/* Redirect Chain Step List */}
               <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-4">
@@ -556,7 +606,7 @@ export const NetworkCheck: React.FC = () => {
                     </p>
                   </div>
                   <span className="text-xs font-mono text-cyan-400">
-                    {networkScan.linkResult.redirectChain.length} Hops Recorded
+                    {networkScan.linkResult.redirectCount ?? 0} Redirects Recorded
                   </span>
                 </div>
 
@@ -599,24 +649,46 @@ export const NetworkCheck: React.FC = () => {
               {/* DNS Records */}
               <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-3">
                 <h3 className="text-base font-bold text-white">DNS Records Discovered</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
                   <div className="p-3 rounded-xl bg-[#0B1220] border border-slate-800 space-y-1">
                     <span className="text-slate-400 uppercase font-sans text-[10px] block">A Records (IPs)</span>
-                    {networkScan.linkResult.dnsRecords.a.map((ip, i) => (
-                      <div key={i} className="text-cyan-300">{ip}</div>
-                    ))}
+                    {networkScan.linkResult.dnsRecords.a?.length ? (
+                      networkScan.linkResult.dnsRecords.a.map((ip, i) => (
+                        <div key={i} className="text-cyan-300 truncate">{ip}</div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500 italic">None</div>
+                    )}
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#0B1220] border border-slate-800 space-y-1">
+                    <span className="text-slate-400 uppercase font-sans text-[10px] block">NS Records (Nameservers)</span>
+                    {networkScan.linkResult.dnsRecords.ns?.length ? (
+                      networkScan.linkResult.dnsRecords.ns.map((ns, i) => (
+                        <div key={i} className="text-sky-300 truncate">{ns}</div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500 italic">None</div>
+                    )}
                   </div>
                   <div className="p-3 rounded-xl bg-[#0B1220] border border-slate-800 space-y-1">
                     <span className="text-slate-400 uppercase font-sans text-[10px] block">MX Records (Mail)</span>
-                    {networkScan.linkResult.dnsRecords.mx.map((mx, i) => (
-                      <div key={i} className="text-slate-300 truncate">{mx}</div>
-                    ))}
+                    {networkScan.linkResult.dnsRecords.mx?.length ? (
+                      networkScan.linkResult.dnsRecords.mx.map((mx, i) => (
+                        <div key={i} className="text-slate-300 truncate">{mx}</div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500 italic">None</div>
+                    )}
                   </div>
                   <div className="p-3 rounded-xl bg-[#0B1220] border border-slate-800 space-y-1">
                     <span className="text-slate-400 uppercase font-sans text-[10px] block">TXT Records (Verification)</span>
-                    {networkScan.linkResult.dnsRecords.txt.map((txt, i) => (
-                      <div key={i} className="text-slate-400 truncate">{txt}</div>
-                    ))}
+                    {networkScan.linkResult.dnsRecords.txt?.length ? (
+                      networkScan.linkResult.dnsRecords.txt.map((txt, i) => (
+                        <div key={i} className="text-slate-400 truncate">{txt}</div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500 italic">None</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -670,22 +742,18 @@ export const NetworkCheck: React.FC = () => {
                 Quick presets:
               </span>
               <button
-                onClick={() => {
-                  setWebsiteInput('portal.example-cloud.io');
-                  handleCheckWebsite('portal.example-cloud.io');
-                }}
+                type="button"
+                onClick={() => setWebsiteInput('portal.example-cloud.io')}
                 className="font-mono text-[11px] bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-300 px-2.5 py-1 rounded-lg border border-yellow-500/30 transition-colors"
               >
-                portal.example-cloud.io (Open SSH & Missing Headers)
+                portal.example-cloud.io (Example Cloud Portal)
               </button>
               <button
-                onClick={() => {
-                  setWebsiteInput('google.com');
-                  handleCheckWebsite('google.com');
-                }}
+                type="button"
+                onClick={() => setWebsiteInput('google.com')}
                 className="font-mono text-[11px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-500/30 transition-colors"
               >
-                google.com (Hardened Production)
+                google.com (Production Website)
               </button>
             </div>
           </div>
@@ -702,6 +770,32 @@ export const NetworkCheck: React.FC = () => {
           {/* Result State */}
           {!isScanning && networkScan.websiteResult && (
             <div className="space-y-6">
+              {/* Blocked Response Warning */}
+              {networkScan.websiteResult.blockedResponseNote && (
+                <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-xs flex items-center gap-3">
+                  <AlertTriangle size={18} className="shrink-0 text-yellow-400" />
+                  <div>
+                    <span className="font-bold block">Blocked Response Detected</span>
+                    <span className="text-slate-300">
+                      {networkScan.websiteResult.blockedResponseNote}. The destination server restricted automated inspection.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* CDN Detection Notice */}
+              {networkScan.websiteResult.cdnDetected && (
+                <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs flex items-center gap-3">
+                  <Server size={18} className="shrink-0 text-cyan-400" />
+                  <div>
+                    <span className="font-bold block">Site is behind {networkScan.websiteResult.cdnDetected}</span>
+                    <span className="text-slate-300">
+                      {networkScan.websiteResult.cdnNote || `This site is behind ${networkScan.websiteResult.cdnDetected}. The SSL certificate, open ports, and security headers shown belong to the CDN edge, not necessarily the origin server.`}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <VerdictCard
                 verdict={networkScan.websiteResult.verdict}
                 title={`Security Configuration for ${networkScan.websiteResult.domain}`}
@@ -731,6 +825,11 @@ export const NetworkCheck: React.FC = () => {
                     <p className="text-xs text-slate-400">
                       Ports are digital doors into your computer. Only standard web doors should be open to visitors.
                     </p>
+                    {networkScan.websiteResult.cdnDetected && (
+                      <p className="text-[11px] text-cyan-400 mt-1 italic">
+                        * Note: Open ports describe the {networkScan.websiteResult.cdnDetected} CDN edge, not necessarily the origin server.
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -787,6 +886,11 @@ export const NetworkCheck: React.FC = () => {
                   <p className="text-xs text-slate-400">
                     Rules your server sends to web browsers to prevent cookie theft and fake popups.
                   </p>
+                  {networkScan.websiteResult.cdnDetected && (
+                    <p className="text-[11px] text-cyan-400 mt-1 italic">
+                      * Note: Security headers describe the {networkScan.websiteResult.cdnDetected} CDN edge, not necessarily the origin server.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

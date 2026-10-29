@@ -26,10 +26,19 @@ export const Navbar: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const { overallScore, overallRisk, hasAnyScan } = useScan();
+  const { overallScore, overallRisk, hasAnyScan, reportData, telegramScan, repoScan, networkScan } = useScan();
   const { user, isAuthenticated, isAdmin, logout, deleteAccount } = useAuth();
   const navigate = useNavigate();
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Compute active modules that contributed real forensic data
+  const modulesPresent: string[] = [];
+  if (telegramScan) modulesPresent.push('Telegram');
+  if (repoScan) modulesPresent.push('Repository');
+  if (networkScan.ipResult) modulesPresent.push('Network IP');
+  if (networkScan.linkResult) modulesPresent.push('Network Link');
+  if (networkScan.websiteResult) modulesPresent.push('Network Website');
+  const hasRealReport = Boolean(reportData && modulesPresent.length > 0);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -76,15 +85,15 @@ export const Navbar: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Brand Logo */}
-            <Link to="/" className="flex items-center gap-3 group">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-sky-600 flex items-center justify-center text-slate-950 shadow-glow group-hover:scale-105 transition-transform">
+            <Link to="/" className="flex items-center gap-3 group py-1 shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-sky-600 flex items-center justify-center text-slate-950 shadow-glow group-hover:scale-105 transition-transform shrink-0">
                 <ShieldAlert size={22} className="stroke-[2.2]" />
               </div>
-              <div>
-                <span className="font-bold text-base sm:text-lg tracking-tight text-white flex items-center gap-1.5">
+              <div className="min-w-0">
+                <span className="font-bold text-base sm:text-lg tracking-tight text-white flex items-center gap-1.5 leading-snug whitespace-nowrap truncate max-w-[200px] sm:max-w-none">
                   Account Breach Investigation
                 </span>
-                <span className="text-[11px] text-cyan-400 font-medium block -mt-1 hidden sm:block">
+                <span className="text-[11px] text-cyan-400 font-medium block -mt-1 hidden sm:block whitespace-nowrap">
                   Find out if you were hacked, and how
                 </span>
               </div>
@@ -92,7 +101,7 @@ export const Navbar: React.FC = () => {
 
             {/* Desktop Navigation */}
             {isAuthenticated && user ? (
-              <div className="hidden md:flex items-center gap-1 lg:gap-2">
+              <div className="hidden xl:flex items-center gap-1.5">
                 {navLinks.map((link) => {
                   const Icon = link.icon;
                   return (
@@ -100,7 +109,7 @@ export const Navbar: React.FC = () => {
                       key={link.to}
                       to={link.to}
                       className={({ isActive }) =>
-                        `px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 ${
+                        `px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                           isActive
                             ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-glow'
                             : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -114,11 +123,18 @@ export const Navbar: React.FC = () => {
                 })}
 
                 {/* Quick Risk Score Pill */}
-                {hasAnyScan && (
-                  <div className="flex items-center gap-1.5 pl-2">
-                    <span className="text-[11px] text-slate-400">Risk:</span>
+                <div
+                  className="flex items-center gap-1.5 pl-2 select-none"
+                  title={
+                    hasRealReport
+                      ? `Risk score ${overallScore}/100 calculated from report based on: ${modulesPresent.join(', ')}`
+                      : 'No completed investigation report yet. Run checks and generate a report to calculate verified risk score.'
+                  }
+                >
+                  <span className="text-[11px] text-slate-400 whitespace-nowrap">Risk:</span>
+                  {hasRealReport ? (
                     <span
-                      className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                      className={`text-xs font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${
                         overallRisk === 'critical'
                           ? 'bg-red-500/10 border-red-500/30 text-red-400'
                           : overallRisk === 'high'
@@ -130,8 +146,12 @@ export const Navbar: React.FC = () => {
                     >
                       {overallScore}/100
                     </span>
-                  </div>
-                )}
+                  ) : (
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full border bg-slate-800/80 border-slate-700 text-slate-400 cursor-help whitespace-nowrap">
+                      —
+                    </span>
+                  )}
+                </div>
 
                 {/* User Account Menu */}
                 <div className="ml-2 pl-3 border-l border-slate-800 relative" ref={dropdownRef}>
@@ -194,7 +214,7 @@ export const Navbar: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="hidden md:flex items-center gap-2">
+              <div className="hidden xl:flex items-center gap-2">
                 <Link
                   to="/login"
                   className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors"
@@ -212,18 +232,35 @@ export const Navbar: React.FC = () => {
 
             {/* Mobile Header Right */}
             {isAuthenticated && user ? (
-              <div className="flex items-center gap-2 md:hidden">
-                {hasAnyScan && (
-                  <span
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                      overallRisk === 'critical'
-                        ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                        : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
-                    }`}
-                  >
-                    {overallScore}/100
-                  </span>
-                )}
+              <div className="flex items-center gap-2 xl:hidden">
+                <div
+                  className="flex items-center gap-1.5 select-none"
+                  title={
+                    hasRealReport
+                      ? `Risk score ${overallScore}/100`
+                      : 'No completed investigation report yet.'
+                  }
+                >
+                  {hasRealReport ? (
+                    <span
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                        overallRisk === 'critical'
+                          ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                          : overallRisk === 'high'
+                          ? 'bg-orange-500/10 border-orange-500/30 text-orange-400'
+                          : overallRisk === 'medium'
+                          ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                          : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      }`}
+                    >
+                      {overallScore}/100
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border bg-slate-800/80 border-slate-700 text-slate-400">
+                      —
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                   className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
@@ -233,7 +270,7 @@ export const Navbar: React.FC = () => {
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2 md:hidden">
+              <div className="flex items-center gap-2 xl:hidden">
                 <Link
                   to="/login"
                   className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white transition-colors"
@@ -253,7 +290,7 @@ export const Navbar: React.FC = () => {
 
         {/* Mobile Dropdown */}
         {isAuthenticated && user && mobileMenuOpen && (
-          <div className="md:hidden bg-[#0B1220] border-b border-slate-800 px-4 pt-2 pb-4 space-y-1">
+          <div className="xl:hidden bg-[#0B1220] border-b border-slate-800 px-4 pt-2 pb-4 space-y-1">
             {navLinks.map((link) => {
               const Icon = link.icon;
               return (

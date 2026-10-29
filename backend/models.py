@@ -31,8 +31,12 @@ class IpCheckResponse(AppBaseModel):
     is_vpn: bool = Field(..., alias="isVpn")
     is_proxy: bool = Field(..., alias="isProxy")
     is_tor: bool = Field(..., alias="isTor")
+    tor_status: str = Field(default="not_detected", alias="torStatus")
     is_hosting: bool = Field(default=False, alias="isHosting")
     abuse_score: int = Field(..., alias="abuseScore", ge=0, le=100)
+    abuse_db_checked: bool = Field(default=False, alias="abuseDbChecked")
+    total_reports: Optional[int] = Field(default=None, alias="totalReports")
+    recommendation: str = Field(default="", alias="recommendation")
     verdict: VerdictType
     risk_level: RiskLevel = Field(..., alias="riskLevel")
     explanation: str
@@ -72,7 +76,12 @@ class LinkCheckResponse(AppBaseModel):
     ssl_issuer: Optional[str] = Field(default=None, alias="sslIssuer")
     ssl_expires_on: Optional[str] = Field(default=None, alias="sslExpiresOn")
     redirect_chain: List[RedirectHop] = Field(default_factory=list, alias="redirectChain")
+    redirect_count: int = Field(default=0, alias="redirectCount")
     reputation_score: int = Field(..., alias="reputationScore", ge=0, le=100)
+    reputation_checked: bool = Field(default=False, alias="reputationChecked")
+    cdn_detected: Optional[str] = Field(default=None, alias="cdnDetected")
+    cdn_note: Optional[str] = Field(default=None, alias="cdnNote")
+    is_inconclusive: bool = Field(default=False, alias="isInconclusive")
     verdict: VerdictType
     risk_level: RiskLevel = Field(..., alias="riskLevel")
     explanation: str
@@ -109,6 +118,9 @@ class WebsiteCheckResponse(AppBaseModel):
     ssl_expires_on: Optional[str] = Field(default=None, alias="sslExpiresOn")
     ssl_days_remaining: int = Field(..., alias="sslDaysRemaining")
     security_headers: List[SecurityHeaderCheck] = Field(..., alias="securityHeaders")
+    cdn_detected: Optional[str] = Field(default=None, alias="cdnDetected")
+    cdn_note: Optional[str] = Field(default=None, alias="cdnNote")
+    blocked_response_note: Optional[str] = Field(default=None, alias="blockedResponseNote")
     risk_score: int = Field(..., alias="riskScore", ge=0, le=100)
     risk_level: RiskLevel = Field(..., alias="riskLevel")
     verdict: VerdictType

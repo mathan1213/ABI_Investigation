@@ -94,8 +94,12 @@ export interface IpCheckResult {
   isVpn: boolean;
   isProxy: boolean;
   isTor: boolean;
+  torStatus?: 'confirmed' | 'not_detected' | 'unknown';
   isHosting?: boolean;
   abuseScore: number; // 0 - 100
+  abuseDbChecked?: boolean;
+  totalReports?: number | null;
+  recommendation?: string;
   verdict: 'Safe' | 'Suspicious' | 'Dangerous';
   riskLevel: RiskLevel;
   explanation: string;
@@ -111,16 +115,25 @@ export interface RedirectHop {
 
 export interface LinkCheckResult {
   url: string;
+  domain?: string;
   domainAge: string;
+  domainAgeDays?: number | null;
   dnsRecords: {
     a: string[];
     mx: string[];
     txt: string[];
+    ns?: string[];
   };
   sslValid: boolean;
   sslIssuer?: string;
+  sslExpiresOn?: string;
   redirectChain: RedirectHop[];
+  redirectCount?: number;
   reputationScore: number; // 0 - 100 (100 is cleanest)
+  reputationChecked?: boolean;
+  cdnDetected?: string | null;
+  cdnNote?: string | null;
+  isInconclusive?: boolean;
   verdict: 'Safe' | 'Suspicious' | 'Dangerous';
   riskLevel: RiskLevel;
   explanation: string;
@@ -144,9 +157,14 @@ export interface SecurityHeaderCheck {
 export interface WebsiteCheckResult {
   domain: string;
   ports: PortCheck[];
+  openPorts?: number[];
   sslExpiry: string;
+  sslExpiresOn?: string;
   sslDaysRemaining: number;
   securityHeaders: SecurityHeaderCheck[];
+  cdnDetected?: string | null;
+  cdnNote?: string | null;
+  blockedResponseNote?: string | null;
   riskScore: number;
   riskLevel: RiskLevel;
   verdict: 'Safe' | 'Suspicious' | 'Dangerous';

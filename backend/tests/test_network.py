@@ -1,10 +1,11 @@
 import pytest
 import time
+import datetime
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 from main import app
 from routers.network import _rate_limit_records
-from modules.network_module import get_apex_domain
+from modules.network_module import get_apex_domain, format_asn, detect_cdn
 
 client = TestClient(app)
 
@@ -359,3 +360,205 @@ def test_rate_limiter_exceeded():
         response = client.post("/api/network/ip", json={"ip": "8.8.8.8"})
         assert response.status_code == 429
         assert "Rate limit exceeded" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 8. Network Check Accuracy & Wording Tests (8 Specific Coverage Tests)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_residential_wording_in_ip_check():
+    """1. Remove every claim that an IP is residential. Use 'Internet provider network' instead."""
+    mock_geo_home = MagicMock()
+    mock_geo_home.status_code = 200
+    mock_geo_home.json.return_value = {
+        "status": "success",
+        "country": "United States",
+        "city": "Dallas",
+        "isp": "AT&T Internet Services",
+        "as": "AS7018 AT&T Services",
+        "proxy": False,
+        "hosting": False,
+    }
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_geo_home
+        with patch("modules.network_module.get_tor_exit_nodes", new_callable=AsyncMock) as mock_tor:
+            mock_tor.return_value = set()
+            resp = client.post("/api/network/ip", json={"ip": "12.34.56.78"})
+            assert resp.status_code == 200
+            data = resp.json()
+            text_dump = str(data).lower()
+            assert "residential" not in text_dump
+            assert "broadband" not in text_dump
+            assert "internet provider network" in data["explanation"].lower()
+
+
+@pytest.mark.asyncio
+async def test_abuse_wording_without_key():
+    """2. When ABUSEIPDB_KEY is unset: rename to estimated score, note DBs not checked, never write 'zero reports'."""
+    mock_geo = MagicMock()
+    mock_geo.status_code = 200
+    mock_geo.json.return_value = {
+        "status": "success",
+        "country": "United States",
+        "city": "Austin",
+        "isp": "Local ISP",
+        "as": "AS12345 Local ISP",
+        "proxy": False,
+        "hosting": False,
+    }
+    with patch("config.settings.ABUSEIPDB_KEY", ""):
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_geo
+            with patch("modules.network_module.get_tor_exit_nodes", new_callable=AsyncMock) as mock_tor:
+                mock_tor.return_value = set()
+                resp = client.post("/api/network/ip", json={"ip": "93.184.216.34"})
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["abuseDbChecked"] is False
+                assert data["totalReports"] is None
+                assert "Abuse report databases were not checked" in data["explanation"]
+                assert "zero reports" not in data["explanation"].lower()
+                assert "no reports of malicious activity" not in data["explanation"].lower()
+
+
+@pytest.mark.asyncio
+async def test_zero_redirect_counting():
+    """3. Direct link is 0 redirects (only count actual 3xx codes, fix off-by-one)."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.is_redirect = False
+    mock_resp.url = "https://example.com"
+    mock_resp.headers = {"server": "nginx"}
+    mock_resp.text = "<html><head><title>Test</title></head><body>Hello</body></html>"
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+            mock_val.return_value = ["93.184.216.34"]
+            with patch("dns.resolver.Resolver"):
+                resp = client.post("/api/network/link", json={"url": "https://example.com"})
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["redirectCount"] == 0
+                assert len(data["redirectChain"]) == 1
+                assert "Direct connection" in data["redirectChain"][0]["note"]
+
+
+@pytest.mark.asyncio
+async def test_cloudflare_cdn_detection():
+    """4. Detect Cloudflare CIDR range and headers, show edge disclaimer note."""
+    cdn = detect_cdn({"cf-ray": "12345abcde"}, ["104.16.1.1"])
+    assert cdn == "Cloudflare"
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.is_redirect = False
+    mock_resp.url = "https://cloudflare-site.com"
+    mock_resp.headers = {"server": "cloudflare", "cf-ray": "87654321"}
+    mock_resp.text = "<html><body>Protected by CF</body></html>"
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+            mock_val.return_value = ["104.16.1.1"]
+            with patch("dns.resolver.Resolver"):
+                resp = client.post("/api/network/link", json={"url": "https://cloudflare-site.com"})
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["cdnDetected"] == "Cloudflare"
+                assert "Cloudflare" in data["cdnNote"]
+                assert "The SSL certificate and headers shown belong to the CDN" in data["cdnNote"]
+
+
+@pytest.mark.asyncio
+async def test_blocked_403_inconclusive():
+    """5. Blocked responses (401/403/429/503) must be marked Inconclusive, never Safe."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 403
+    mock_resp.is_redirect = False
+    mock_resp.url = "https://protected-site.com"
+    mock_resp.headers = {"server": "cloudflare"}
+    mock_resp.text = "<html><title>Access Denied / 403 Forbidden</title><body>Forbidden</body></html>"
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+            mock_val.return_value = ["104.16.1.1"]
+            with patch("dns.resolver.Resolver"):
+                resp = client.post("/api/network/link", json={"url": "https://protected-site.com"})
+                assert resp.status_code == 200
+                data = resp.json()
+                assert data["isInconclusive"] is True
+                assert data["verdict"] == "Suspicious"
+                assert data["verdict"] != "Safe"
+                assert data["riskLevel"] == "medium"
+                assert data["reputationScore"] <= 60
+                assert "Inconclusive: the site blocked automated checks" in data["explanation"]
+                assert "HTTP 403" in data["explanation"]
+
+
+@pytest.mark.asyncio
+async def test_score_cap_without_virustotal():
+    """6. Without VIRUSTOTAL_KEY, technical checks score capped at 85, no 'clean reputation' claim."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.is_redirect = False
+    mock_resp.url = "https://safe-domain.org"
+    mock_resp.headers = {"server": "apache"}
+    mock_resp.text = "<html><body>Clean Domain</body></html>"
+
+    mock_whois = MagicMock()
+    mock_whois.creation_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1200)
+
+    with patch("config.settings.VIRUSTOTAL_KEY", ""):
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+                mock_val.return_value = ["93.184.216.34"]
+                with patch("dns.resolver.Resolver"):
+                    with patch("whois.whois", return_value=mock_whois):
+                        resp = client.post("/api/network/link", json={"url": "https://safe-domain.org"})
+                        assert resp.status_code == 200
+                        data = resp.json()
+                        assert data["reputationChecked"] is False
+                        assert data["reputationScore"] <= 85
+                        assert "Reputation databases were not checked" in data["explanation"]
+                        assert "clean reputation" not in data["explanation"].lower()
+
+
+@pytest.mark.asyncio
+async def test_domain_age_unknown_on_whois_failure():
+    """7. WHOIS failure results in 'Domain age: unknown' without 40-point score deduction."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.is_redirect = False
+    mock_resp.url = "https://cctld-restricted.de"
+    mock_resp.headers = {}
+    mock_resp.text = "<html><body>German site</body></html>"
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        with patch("modules.network_module.validate_hostname_or_ip") as mock_val:
+            mock_val.return_value = ["93.184.216.34"]
+            with patch("dns.resolver.Resolver"):
+                with patch("whois.whois", side_effect=Exception("WHOIS connection failed")):
+                    resp = client.post("/api/network/link", json={"url": "https://cctld-restricted.de"})
+                    assert resp.status_code == 200
+                    data = resp.json()
+                    assert data["domainAgeDays"] is None
+                    assert "Domain age: unknown" in data["domainAge"]
+                    assert "WHOIS query unavailable or registry restricted" in data["domainAge"]
+                    assert data["reputationScore"] >= 70
+
+
+def test_generic_asn_label_replacement():
+    """8. Generic ASN descriptions are replaced with organization or ISP name."""
+    formatted = format_asn("AS12345 AS Number for Interdomain Routing", isp="MegaCorp Fiber", org="MegaCorp LLC")
+    assert formatted == "AS12345 - MegaCorp LLC"
+
+    formatted_org = format_asn("AS67890 AS-BLOCK", isp="Acme ISP", org="")
+    assert formatted_org == "AS67890 - Acme ISP"
+
+    formatted_clean = format_asn("AS15169 Google LLC", isp="Google LLC", org="Google LLC")
+    assert formatted_clean == "AS15169 - Google LLC"
